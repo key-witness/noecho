@@ -1,0 +1,10 @@
+{
+  "name": "Noecho",
+  "short_name": "Noecho",
+  "description": "Phone cockpit for long-running coding agents.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050506",
+  "theme_color": "#050506",
+  "icons": []
+}

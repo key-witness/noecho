@@ -1,0 +1,21 @@
+{
+  "name": "noecho",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.5.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "node scripts/check-workspaces.mjs build",
+    "typecheck": "node scripts/check-workspaces.mjs typecheck",
+    "lint": "node scripts/check-workspaces.mjs lint",
+    "test": "node scripts/check-workspaces.mjs test",
+    "dev:web": "node scripts/serve-web.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

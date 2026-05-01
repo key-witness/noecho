@@ -1,0 +1,11 @@
+{
+  "name": "@noecho/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ../../scripts/check-workspaces.mjs build:web",
+    "typecheck": "node ../../scripts/check-workspaces.mjs typecheck:web",
+    "dev": "node ../../scripts/serve-web.mjs"
+  }
+}

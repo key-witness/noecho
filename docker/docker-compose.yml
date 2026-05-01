@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: noecho
+      POSTGRES_USER: noecho
+      POSTGRES_PASSWORD: noecho
+    ports:
+      - "54329:5432"
+    volumes:
+      - noecho-postgres:/var/lib/postgresql/data
+
+  server:
+    image: node:24-alpine
+    working_dir: /workspace
+    command: node apps/server/src/server.mjs
+    ports:
+      - "4010:4010"
+    volumes:
+      - ..:/workspace
+    environment:
+      PORT: 4010
+
+volumes:
+  noecho-postgres:

@@ -1,0 +1,14 @@
+{
+  "name": "@noecho/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "noecho": "./src/cli.mjs"
+  },
+  "scripts": {
+    "build": "node ../../scripts/check-workspaces.mjs build:daemon",
+    "doctor": "node src/cli.mjs doctor",
+    "pair": "node src/cli.mjs pair"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "@noecho/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ../../scripts/check-workspaces.mjs build:server",
+    "dev": "node src/server.mjs"
+  }
+}
