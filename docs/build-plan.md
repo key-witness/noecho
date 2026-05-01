@@ -21,6 +21,8 @@ Status: first mock implemented.
 
 ## Phase 3 - Protocol
 
+Status: in progress.
+
 - Add zod schemas for machines, tabs, events, prompts, approvals, goals, spend limits, and MPP receipts.
 
 ## Phase 4 - Hosted Beta

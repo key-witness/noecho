@@ -26,3 +26,10 @@ Implementation notes:
 - Added multi-agent tabs for Codex, Claude, OpenCode, and shell.
 - Added workspace views for terminal, prompts, `/goal`, approvals, history, spend, and settings.
 - Kept implementation dependency-light in vanilla JS/CSS so Step 2 remains fast and easy to inspect.
+
+## 2026-05-01 - Step 3 Protocol Schemas
+
+Implementation notes:
+
+- Added `zod` and defined shared schemas for wallet identities, machines, tabs, terminal chunks, approvals, prompts, goals, spend limits, and MPP receipts.
+- Exported parser helpers and fixtures so future apps can share one contract layer.
