@@ -57,3 +57,11 @@ Implementation notes:
 - Added local server endpoints for creating goal runs and appending checkpoints.
 - Added a PWA `/goal` start action for a 9-hour Codex run with a $15 cap.
 - Expanded the daemon CLI so self-hosted users can create, inspect, and checkpoint goal runs in local state.
+
+## 2026-05-01 - Step 7 MPP Monetization Boundary
+
+Implementation notes:
+
+- Added MPP-style paid action discovery through OpenAPI and catalog endpoints.
+- Added feature-flagged `402` behavior for paid actions when MPP is enabled.
+- Documented the hosted/self-hosted monetization boundary.

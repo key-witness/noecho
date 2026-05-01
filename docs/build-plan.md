@@ -51,6 +51,8 @@ Status: local foundation in progress.
 
 ## Phase 7 - MPP Monetization
 
+Status: discovery and 402 boundary implemented.
+
 - Add MPP-protected endpoints for hosted transcription, prompt packs, reviews, scans, deploy assist, and goal budgets.
 - Store receipts and expose spend controls.
 

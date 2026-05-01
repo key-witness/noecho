@@ -7,6 +7,8 @@ export const riskLevels = ["safe", "file-edit", "shell", "deploy", "payment", "s
 export const machineStatuses = ["pairing", "online", "offline", "revoked"] as const;
 export const eventKinds = ["heard", "planned", "edited", "tested", "blocked", "ready", "log"] as const;
 export const walletChains = ["eip155", "solana"] as const;
+export const mppIntents = ["charge", "session"] as const;
+export const mppMethods = ["tempo", "stripe", "manual"] as const;
 
 export const WalletIdentitySchema = z.object({
   id: z.string().min(1),
@@ -116,6 +118,13 @@ export const MppReceiptSchema = z.object({
   createdAt: z.string().datetime()
 });
 
+export const MppOfferSchema = z.object({
+  amount: z.string().min(1),
+  currency: z.string().min(1),
+  intent: z.enum(mppIntents),
+  method: z.enum(mppMethods)
+});
+
 export type AgentKind = z.infer<typeof AgentTabSchema>["agent"];
 export type AgentMode = z.infer<typeof AgentTabSchema>["mode"];
 export type AgentStatus = z.infer<typeof AgentTabSchema>["status"];
@@ -133,6 +142,7 @@ export type GoalRun = z.infer<typeof GoalRunSchema>;
 export type GoalCheckpoint = z.infer<typeof GoalCheckpointSchema>;
 export type SpendLimit = z.infer<typeof SpendLimitSchema>;
 export type MppReceipt = z.infer<typeof MppReceiptSchema>;
+export type MppOffer = z.infer<typeof MppOfferSchema>;
 
 export const parseWalletIdentity = (input: unknown) => WalletIdentitySchema.parse(input);
 export const parseMachine = (input: unknown) => MachineSchema.parse(input);
@@ -146,6 +156,7 @@ export const parseGoalRun = (input: unknown) => GoalRunSchema.parse(input);
 export const parseGoalCheckpoint = (input: unknown) => GoalCheckpointSchema.parse(input);
 export const parseSpendLimit = (input: unknown) => SpendLimitSchema.parse(input);
 export const parseMppReceipt = (input: unknown) => MppReceiptSchema.parse(input);
+export const parseMppOffer = (input: unknown) => MppOfferSchema.parse(input);
 
 export function createProtocolFixtures() {
   const now = new Date().toISOString();

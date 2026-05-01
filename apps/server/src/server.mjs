@@ -4,16 +4,47 @@ import { verifyMessage } from "viem";
 
 const port = Number(process.env.PORT || 4010);
 const origin = process.env.NOECHO_WEB_ORIGIN || "http://127.0.0.1:3002";
+const publicBaseUrl = process.env.NOECHO_PUBLIC_BASE_URL || `http://127.0.0.1:${port}`;
+const mppEnabled = process.env.NOECHO_MPP_ENABLED === "true";
 const nonces = new Map();
 const sessions = new Map();
 const goalRuns = new Map();
 const goalCheckpoints = new Map();
+const paidActions = [
+  {
+    id: "prompt-pack-vibe",
+    title: "Vibe Dev Prompt Pack",
+    path: "/paid/prompt-pack/vibe",
+    amount: "0.99",
+    currency: "usd",
+    intent: "charge",
+    method: "tempo"
+  },
+  {
+    id: "goal-session",
+    title: "Hosted Codex Goal Session",
+    path: "/paid/goal-session",
+    amount: "15.00",
+    currency: "usd",
+    intent: "session",
+    method: "tempo"
+  },
+  {
+    id: "contract-audit-scan",
+    title: "Contract Audit Scan",
+    path: "/paid/contract-audit",
+    amount: "1.20",
+    currency: "usd",
+    intent: "charge",
+    method: "tempo"
+  }
+];
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": origin,
-    "access-control-allow-headers": "content-type",
+    "access-control-allow-headers": "authorization,content-type,x-mpp-receipt",
     "access-control-allow-methods": "GET,POST,OPTIONS"
   });
   res.end(JSON.stringify(payload));
@@ -43,6 +74,56 @@ function readJson(req) {
     });
     req.on("error", reject);
   });
+}
+
+function paymentInfoFor(action) {
+  return {
+    offers: [
+      {
+        amount: action.amount,
+        currency: action.currency,
+        intent: action.intent,
+        method: action.method
+      }
+    ]
+  };
+}
+
+function sendPaymentRequired(res, action) {
+  sendJson(res, 402, {
+    ok: false,
+    error: "payment required",
+    action: action.id,
+    title: action.title,
+    payment: paymentInfoFor(action)
+  });
+}
+
+function openApiDocument() {
+  return {
+    openapi: "3.1.0",
+    info: {
+      title: "Noecho Paid Actions",
+      version: "0.0.0"
+    },
+    servers: [{ url: publicBaseUrl }],
+    paths: Object.fromEntries(
+      paidActions.map((action) => [
+        action.path,
+        {
+          post: {
+            operationId: action.id,
+            summary: action.title,
+            "x-payment-info": paymentInfoFor(action),
+            responses: {
+              200: { description: "Paid action accepted" },
+              402: { description: "Payment required" }
+            }
+          }
+        }
+      ])
+    )
+  };
 }
 
 function createGoalRun(input) {
@@ -87,7 +168,7 @@ createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "access-control-allow-origin": origin,
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-headers": "authorization,content-type,x-mpp-receipt",
       "access-control-allow-methods": "GET,POST,OPTIONS"
     });
     res.end();
@@ -95,7 +176,21 @@ createServer(async (req, res) => {
   }
 
   if (req.url === "/health") {
-    sendJson(res, 200, { ok: true, service: "noecho-server", phase: "step5-wallet-auth" });
+    sendJson(res, 200, { ok: true, service: "noecho-server", phase: "step7-mpp-foundation" });
+    return;
+  }
+
+  if (req.url === "/openapi.json" && req.method === "GET") {
+    sendJson(res, 200, openApiDocument());
+    return;
+  }
+
+  if ((req.url === "/mpp/offers" || req.url === "/.well-known/mpp.json") && req.method === "GET") {
+    sendJson(res, 200, {
+      ok: true,
+      enabled: mppEnabled,
+      actions: paidActions.map((action) => ({ ...action, payment: paymentInfoFor(action) }))
+    });
     return;
   }
 
@@ -215,6 +310,31 @@ createServer(async (req, res) => {
     } catch (error) {
       sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
     }
+    return;
+  }
+
+  if (req.url?.startsWith("/paid/") && req.method === "POST") {
+    const action = paidActions.find((item) => req.url === item.path);
+    if (!action) {
+      sendJson(res, 404, { ok: false, error: "paid action not found" });
+      return;
+    }
+
+    const paymentCredential = req.headers.authorization || req.headers["x-mpp-receipt"];
+
+    if (mppEnabled && !paymentCredential) {
+      sendPaymentRequired(res, action);
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      paid: mppEnabled,
+      action: action.id,
+      title: action.title,
+      receipt: paymentCredential || "dev-mode-free-tier",
+      result: `${action.title} accepted`
+    });
     return;
   }
 
