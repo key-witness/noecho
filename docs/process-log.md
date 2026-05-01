@@ -33,3 +33,11 @@ Implementation notes:
 
 - Added `zod` and defined shared schemas for wallet identities, machines, tabs, terminal chunks, approvals, prompts, goals, spend limits, and MPP receipts.
 - Exported parser helpers and fixtures so future apps can share one contract layer.
+
+## 2026-05-01 - Step 4 Supabase Hosted Beta Schema
+
+Implementation notes:
+
+- Added a second Supabase migration for hosted-beta tables that were missing from the scaffold.
+- Added an auth ownership helper and RLS policies keyed off `profiles.auth_user_id`.
+- Kept donations nullable so supporter flows can exist before full auth is wired.

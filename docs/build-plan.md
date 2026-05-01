@@ -27,6 +27,8 @@ Status: in progress.
 
 ## Phase 4 - Hosted Beta
 
+Status: in progress.
+
 - Add Supabase wallet profiles, QR pairing, daemon sync, and event streaming.
 - Keep Vercel/Supabase free-tier usage lean.
 - Keep paid MPP actions feature-flagged until commercial hosting is ready.
