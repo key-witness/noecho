@@ -44,18 +44,16 @@ The scaffold is dependency-light on purpose. The first scripts validate structur
 Implemented:
 
 - Monorepo structure.
-- PWA placeholder shell.
-- Daemon CLI placeholder.
-- Self-hosted server placeholder.
-- Shared package placeholders.
+- Phone PWA shell with wallet login, agent tabs, terminal, prompt library, setup, approvals, spend, and settings.
+- Daemon CLI with pairing and local `/goal` state.
+- Self-hosted server with wallet auth, pairing, goals, checkpoints, and MPP discovery boundary.
+- Shared protocol schemas.
 - Supabase starter migration.
 - Docker Compose starter.
 - Brief process docs.
 
 Next:
 
-- Replace the static PWA shell with the real phone cockpit.
-- Add protocol schemas.
-- Add wallet-first auth.
-- Add QR machine pairing.
-- Add daemon-managed agent tabs and `/goal`.
+- Wire persistent Supabase auth/session storage.
+- Add QR rendering and live daemon sync.
+- Spawn real Codex/Claude/OpenCode adapters behind approval gates.

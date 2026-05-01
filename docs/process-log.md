@@ -65,3 +65,11 @@ Implementation notes:
 - Added MPP-style paid action discovery through OpenAPI and catalog endpoints.
 - Added feature-flagged `402` behavior for paid actions when MPP is enabled.
 - Documented the hosted/self-hosted monetization boundary.
+
+## 2026-05-01 - Step 8 Pairing And Setup Flow
+
+Implementation notes:
+
+- Preserved the prototype's blue-black terminal styling and voice-first copy.
+- Added local pairing endpoints and daemon completion support.
+- Added the PWA setup view for daemon pairing, BYOK key state, model selection, and project/branch selection.

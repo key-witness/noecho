@@ -8,6 +8,8 @@ const publicBaseUrl = process.env.NOECHO_PUBLIC_BASE_URL || `http://127.0.0.1:${
 const mppEnabled = process.env.NOECHO_MPP_ENABLED === "true";
 const nonces = new Map();
 const sessions = new Map();
+const pairingCodes = new Map();
+const machines = new Map();
 const goalRuns = new Map();
 const goalCheckpoints = new Map();
 const paidActions = [
@@ -126,6 +128,25 @@ function openApiDocument() {
   };
 }
 
+function createPairing(input = {}) {
+  const code = randomUUID().split("-")[0].toUpperCase();
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const pairing = {
+    code,
+    profileId: input.profileId || "profile_demo",
+    machineName: input.machineName || "vps-helix",
+    pairingUrl: `noecho://pair?code=${code}`,
+    command: `noecho pair ${code}`,
+    status: "pairing",
+    createdAt: now,
+    expiresAt
+  };
+
+  pairingCodes.set(code, pairing);
+  return pairing;
+}
+
 function createGoalRun(input) {
   const id = `goal_${randomUUID().split("-")[0]}`;
   const now = new Date().toISOString();
@@ -176,7 +197,7 @@ createServer(async (req, res) => {
   }
 
   if (req.url === "/health") {
-    sendJson(res, 200, { ok: true, service: "noecho-server", phase: "step7-mpp-foundation" });
+    sendJson(res, 200, { ok: true, service: "noecho-server", phase: "step8-pairing-setup" });
     return;
   }
 
@@ -261,6 +282,61 @@ createServer(async (req, res) => {
     const token = url.searchParams.get("token");
     const session = token ? sessions.get(token) : null;
     sendJson(res, session ? 200 : 404, session ? { ok: true, session } : { ok: false, error: "session not found" });
+    return;
+  }
+
+  if (req.url === "/pairing/start" && req.method === "POST") {
+    try {
+      const body = await readJson(req);
+      sendJson(res, 201, { ok: true, pairing: createPairing(body) });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
+    return;
+  }
+
+  if (req.url?.startsWith("/pairing/") && req.method === "GET") {
+    const code = decodeURIComponent(req.url.split("/").pop() || "").toUpperCase();
+    const pairing = pairingCodes.get(code);
+    if (!pairing || Date.parse(pairing.expiresAt) < Date.now()) {
+      sendJson(res, 404, { ok: false, error: "pairing code not found" });
+      return;
+    }
+
+    sendJson(res, 200, { ok: true, pairing });
+    return;
+  }
+
+  if (req.url === "/pairing/complete" && req.method === "POST") {
+    try {
+      const body = await readJson(req);
+      const code = String(body.code || "").toUpperCase();
+      const pairing = pairingCodes.get(code);
+      if (!pairing || Date.parse(pairing.expiresAt) < Date.now()) {
+        sendJson(res, 404, { ok: false, error: "pairing code not found" });
+        return;
+      }
+
+      const machine = {
+        id: `machine_${code.toLowerCase()}`,
+        ownerId: pairing.profileId,
+        name: body.machineName || pairing.machineName,
+        publicKey: body.publicKey || `ssh-ed25519 ${code} noecho-pairing`,
+        status: "online",
+        createdAt: new Date().toISOString()
+      };
+
+      machines.set(machine.id, machine);
+      pairingCodes.set(code, { ...pairing, status: "online", machineId: machine.id });
+      sendJson(res, 200, { ok: true, machine });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
+    return;
+  }
+
+  if (req.url === "/machines" && req.method === "GET") {
+    sendJson(res, 200, { ok: true, machines: [...machines.values()] });
     return;
   }
 

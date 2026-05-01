@@ -26,6 +26,17 @@ export const MachineSchema = z.object({
   createdAt: z.string().datetime()
 });
 
+export const PairingCodeSchema = z.object({
+  code: z.string().min(4),
+  profileId: z.string().min(1),
+  machineName: z.string().min(1),
+  pairingUrl: z.string().min(1),
+  command: z.string().min(1),
+  status: z.enum(machineStatuses),
+  createdAt: z.string().datetime(),
+  expiresAt: z.string().datetime()
+});
+
 export const AgentTabSchema = z.object({
   id: z.string().min(1),
   machineId: z.string().min(1),
@@ -132,6 +143,7 @@ export type RiskLevel = z.infer<typeof AgentTabSchema>["risk"];
 
 export type WalletIdentity = z.infer<typeof WalletIdentitySchema>;
 export type Machine = z.infer<typeof MachineSchema>;
+export type PairingCode = z.infer<typeof PairingCodeSchema>;
 export type AgentTab = z.infer<typeof AgentTabSchema>;
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
 export type TerminalChunk = z.infer<typeof TerminalChunkSchema>;
@@ -146,6 +158,7 @@ export type MppOffer = z.infer<typeof MppOfferSchema>;
 
 export const parseWalletIdentity = (input: unknown) => WalletIdentitySchema.parse(input);
 export const parseMachine = (input: unknown) => MachineSchema.parse(input);
+export const parsePairingCode = (input: unknown) => PairingCodeSchema.parse(input);
 export const parseAgentTab = (input: unknown) => AgentTabSchema.parse(input);
 export const parseAgentEvent = (input: unknown) => AgentEventSchema.parse(input);
 export const parseTerminalChunk = (input: unknown) => TerminalChunkSchema.parse(input);
@@ -175,6 +188,16 @@ export function createProtocolFixtures() {
       publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINoecho",
       status: "online",
       createdAt: now
+    },
+    pairingCode: {
+      code: "A1B2C3D4",
+      profileId: "profile_01",
+      machineName: "vps-helix",
+      pairingUrl: "noecho://pair?code=A1B2C3D4",
+      command: "noecho pair A1B2C3D4",
+      status: "pairing",
+      createdAt: now,
+      expiresAt: now
     },
     agentTab: {
       id: "tab_01",
@@ -214,6 +237,7 @@ export function createProtocolFixtures() {
   } satisfies {
     walletIdentity: WalletIdentity;
     machine: Machine;
+    pairingCode: PairingCode;
     agentTab: AgentTab;
     agentEvent: AgentEvent;
     goalRun: GoalRun;

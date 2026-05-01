@@ -29,8 +29,8 @@ body {
   margin: 0;
   min-height: 100svh;
   background:
-    linear-gradient(180deg, rgba(177, 181, 188, 0.12), transparent 210px),
-    radial-gradient(circle at 50% 0%, rgba(218, 119, 86, 0.13), transparent 26%),
+    linear-gradient(180deg, rgba(107, 138, 171, 0.08), transparent 210px),
+    radial-gradient(circle at 50% 0%, rgba(107, 138, 171, 0.09), transparent 26%),
     var(--bg);
   color: var(--text);
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -96,6 +96,10 @@ h1 {
   font-size: 30px;
   line-height: 1;
   letter-spacing: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.92) 0%, rgba(107,138,171,0.85) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 h2 {
@@ -154,9 +158,9 @@ h3 {
   grid-template-columns: minmax(0, 1fr);
   gap: 9px;
   margin: 14px 0 12px;
-  border: 1px solid rgba(218, 119, 86, 0.26);
+  border: 1px solid rgba(107, 138, 171, 0.25);
   border-radius: 14px;
-  background: rgba(218, 119, 86, 0.08);
+  background: rgba(107, 138, 171, 0.06);
   padding: 11px;
   flex: 0 0 auto;
 }
@@ -192,6 +196,12 @@ h3 {
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wallet-actions [data-wallet-action="connect"] {
+  border-color: rgba(107, 138, 171, 0.4);
+  background: rgba(107, 138, 171, 0.12);
+  color: var(--blue);
 }
 
 .session-strip {
@@ -259,8 +269,8 @@ h3 {
 }
 
 .agent-tab.is-active {
-  border-color: rgba(218, 119, 86, 0.52);
-  background: rgba(218, 119, 86, 0.1);
+  border-color: rgba(107, 138, 171, 0.45);
+  background: rgba(107, 138, 171, 0.12);
 }
 
 .agent-tab__top {
@@ -501,6 +511,194 @@ h3 {
   padding: 12px;
 }
 
+.model-toggle {
+  display: flex;
+  gap: 7px;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+}
+
+.model-toggle button {
+  min-width: 0;
+  border: 1px solid rgba(177, 181, 188, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+  padding: 7px 11px;
+  font-size: 10px;
+}
+
+.model-toggle button.is-active {
+  border-color: rgba(107, 138, 171, 0.42);
+  background: rgba(107, 138, 171, 0.14);
+  color: var(--blue);
+}
+
+.model-toggle button.claude {
+  border-color: rgba(218, 119, 86, 0.34);
+  background: rgba(218, 119, 86, 0.12);
+  color: var(--orange);
+}
+
+.model-toggle button.gpt {
+  border-color: rgba(116, 170, 156, 0.34);
+  background: rgba(116, 170, 156, 0.12);
+  color: var(--green);
+}
+
+.setup-grid {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+}
+
+.setup-card {
+  min-width: 0;
+  border: 1px solid rgba(107, 138, 171, 0.22);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.032);
+  padding: 12px;
+}
+
+.section-label {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--blue);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.setup-card > code {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #020304;
+  color: var(--green);
+  padding: 10px;
+  font-size: 10px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.setup-card p {
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.pairing-code {
+  margin-top: 10px;
+  border: 1px solid rgba(107, 138, 171, 0.3);
+  border-radius: 10px;
+  background: rgba(107, 138, 171, 0.1);
+  color: var(--blue);
+  padding: 9px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-align: center;
+}
+
+.setup-card > button {
+  width: 100%;
+  margin-top: 10px;
+  border: 1px solid rgba(107, 138, 171, 0.34);
+  border-radius: 10px;
+  background: rgba(107, 138, 171, 0.12);
+  color: var(--blue);
+  padding: 10px;
+  font-size: 10px;
+}
+
+.key-list,
+.project-list {
+  display: grid;
+  gap: 8px;
+}
+
+.key-list > div,
+.project-list button {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 10px;
+}
+
+.key-list > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.key-list span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.key-list span.ok {
+  background: var(--green);
+}
+
+.key-list span.warn {
+  background: var(--orange);
+}
+
+.key-list span.info {
+  background: var(--blue);
+}
+
+.key-list strong,
+.project-list strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.key-list em,
+.project-list em,
+.project-list small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.key-list code {
+  grid-column: 2 / -1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-list button {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text);
+  text-align: left;
+}
+
+.project-list button span {
+  min-width: 0;
+}
+
+.project-list button.is-active {
+  border-color: rgba(107, 138, 171, 0.42);
+  background: rgba(107, 138, 171, 0.12);
+}
+
 .prompt-row,
 .settings-list button {
   width: 100%;
@@ -729,26 +927,34 @@ h3 {
 .voice {
   position: relative;
   z-index: 1;
-  width: 66px;
-  height: 66px;
-  border: 1px solid rgba(218, 119, 86, 0.5);
+  width: 68px;
+  height: 68px;
+  border: 1.5px solid rgba(107, 138, 171, 0.5);
   border-radius: 50%;
-  background: rgba(218, 119, 86, 0.18);
-  box-shadow: 0 0 34px rgba(218, 119, 86, 0.28);
+  background: rgba(107, 138, 171, 0.15);
+  box-shadow: 0 0 28px rgba(107, 138, 171, 0.3);
   pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .voice span {
   width: 18px;
   height: 24px;
-  border: 2px solid var(--orange);
+  border: 2px solid var(--blue);
   border-radius: 12px;
   display: inline-block;
 }
 
 .voice-dock.is-recording .voice {
-  background: rgba(218, 119, 86, 0.3);
+  border-color: rgba(218, 119, 86, 0.6);
+  background: rgba(218, 119, 86, 0.25);
   box-shadow: 0 0 42px rgba(218, 119, 86, 0.52);
+}
+
+.voice-dock.is-recording .voice span {
+  border-color: var(--orange);
 }
 
 @media (max-width: 460px) {

@@ -27,7 +27,7 @@ Status: complete.
 
 ## Phase 4 - Hosted Beta
 
-Status: first migration complete.
+Status: migration and local pairing API complete.
 
 - Add Supabase wallet profiles, QR pairing, daemon sync, and event streaming.
 - Keep Vercel/Supabase free-tier usage lean.
@@ -43,7 +43,7 @@ Status: implemented for local beta.
 
 ## Phase 6 - Daemon And Goal Mode
 
-Status: local foundation in progress.
+Status: local foundation and setup flow in progress.
 
 - Implement local/VPS daemon.
 - Add Claude Code, Codex, OpenCode, and shell adapters.

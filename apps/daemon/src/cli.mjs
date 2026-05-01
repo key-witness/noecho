@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { join } from "node:path";
 
 const command = process.argv[2] || "help";
@@ -12,7 +13,7 @@ function printHelp() {
   console.log(`noecho daemon scaffold
 
 commands:
-  noecho pair      create a pairing code for the phone PWA
+  noecho pair      create or complete a pairing code for the phone PWA
   noecho doctor    check local agent prerequisites
   noecho goal      manage long-running /goal jobs
 `);
@@ -42,11 +43,69 @@ function parseHours(value) {
   return Number(String(value).replace("h", ""));
 }
 
+function postJson(url, payload) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const target = new URL(url);
+    const req = request(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        path: target.pathname,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body)
+        }
+      },
+      (res) => {
+        let responseBody = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          responseBody += chunk;
+        });
+        res.on("end", () => {
+          const data = responseBody ? JSON.parse(responseBody) : {};
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(data.error || `request failed with ${res.statusCode}`));
+            return;
+          }
+          resolve(data);
+        });
+      }
+    );
+
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
 function pair() {
-  const code = randomUUID().split("-")[0].toUpperCase();
+  const code = (process.argv[3] || randomUUID().split("-")[0]).toUpperCase();
+  const server = parseOption("--server", "");
+  const machineName = parseOption("--name", "local-daemon");
+
   console.log("noecho pair");
   console.log(`pairing code: ${code}`);
-  console.log("open the phone PWA and enter this code. QR support lands in the pairing step.");
+  console.log(`machine: ${machineName}`);
+
+  if (!server) {
+    console.log("open the phone PWA and enter this code. QR support lands in the pairing step.");
+    return;
+  }
+
+  postJson(`${server.replace(/\/$/, "")}/pairing/complete`, {
+    code,
+    machineName,
+    publicKey: `ssh-ed25519 ${code} noecho-${machineName}`
+  })
+    .then((data) => {
+      console.log(`paired: ${data.machine.name} (${data.machine.id})`);
+    })
+    .catch((error) => {
+      console.error(error instanceof Error ? error.message : "pairing failed");
+      process.exitCode = 1;
+    });
 }
 
 function doctor() {

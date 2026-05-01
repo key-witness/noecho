@@ -1,6 +1,6 @@
 const state = {
   activeTabId: "codex-goal",
-  activeView: "terminal",
+  activeView: new URLSearchParams(window.location.search).get("view") || "terminal",
   recording: false,
   wallet: {
     status: "disconnected",
@@ -11,7 +11,15 @@ const state = {
   },
   authNotice: "wallet login is the default entry point",
   goalRunId: "",
-  goalNotice: "ready to start a 9h codex /goal run"
+  goalNotice: "ready to start a 9h codex /goal run",
+  pairing: {
+    status: "idle",
+    code: "",
+    command: "noecho pair",
+    notice: "run the daemon on your laptop or VPS"
+  },
+  selectedProjectId: "noecho",
+  selectedModel: "codex"
 };
 
 const authServerBase = "http://127.0.0.1:4010";
@@ -118,6 +126,18 @@ const prompts = [
   { title: "make UI tighter", lane: "vibe", price: "$0.40", risk: "file-edit", phrase: "make it cleaner" }
 ];
 
+const byokKeys = [
+  { label: "openai", hint: "voice + gpt", value: "sk-••••••••••••", status: "ready", tone: "ok" },
+  { label: "anthropic", hint: "claude code", value: "demo-anthropic-key", status: "ready", tone: "warn" },
+  { label: "github", hint: "repos + prs", value: "ghp_••••••••••", status: "local", tone: "info" }
+];
+
+const projects = [
+  { id: "noecho", name: "noecho", path: "mip/noecho", branch: "main", machine: "vps-helix" },
+  { id: "vault", name: "vault", path: "contracts/vault", branch: "audit/prelaunch", machine: "vps-helix" },
+  { id: "api", name: "api-server", path: "mip/api-server", branch: "develop", machine: "macbook" }
+];
+
 const approvals = [
   {
     title: "Install Slither on vps-helix",
@@ -171,6 +191,7 @@ const settings = [
 ];
 
 const views = [
+  ["setup", "setup"],
   ["terminal", "terminal"],
   ["prompts", "prompts"],
   ["goal", "/goal"],
@@ -209,7 +230,7 @@ function renderHeader(tab) {
   return `
     <header class="topbar">
       <div>
-        <p class="eyebrow">phone cockpit</p>
+        <p class="eyebrow">speak to ship</p>
         <h1>noecho</h1>
       </div>
       <button class="wallet ${state.wallet.status === "connected" ? "is-connected" : ""}" type="button" data-view="spend">
@@ -303,6 +324,10 @@ function walletAddressFixture() {
   return state.wallet.address || "0x8f2c8d7e7d0d8f2c8d7e7d0d8f2c8d7e7d0d8f2c";
 }
 
+function selectedProject() {
+  return projects.find((project) => project.id === state.selectedProjectId) || projects[0];
+}
+
 async function connectWallet() {
   state.authNotice = "requesting wallet signature...";
   render();
@@ -346,7 +371,7 @@ async function connectWallet() {
       profileId,
       mode: window.ethereum ? "real" : "demo"
     };
-    state.activeView = "terminal";
+    state.activeView = "setup";
     state.authNotice = window.ethereum ? "wallet session verified" : "demo wallet session ready";
   } catch (error) {
     state.wallet = {
@@ -372,6 +397,54 @@ function connectDemoWallet() {
     mode: "demo"
   };
   state.authNotice = "demo wallet session ready";
+  state.activeView = "setup";
+  render();
+}
+
+async function startPairing() {
+  state.pairing = {
+    ...state.pairing,
+    status: "pairing",
+    notice: "creating daemon pairing code..."
+  };
+  render();
+
+  try {
+    const response = await fetchJson(`${authServerBase}/pairing/start`, {
+      method: "POST",
+      body: JSON.stringify({
+        profileId: state.wallet.profileId || "profile_demo",
+        machineName: selectedProject().machine
+      })
+    });
+
+    state.pairing = {
+      status: response.pairing.status,
+      code: response.pairing.code,
+      command: response.pairing.command,
+      notice: `expires ${new Date(response.pairing.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+    };
+  } catch (error) {
+    const code = crypto.randomUUID().split("-")[0].toUpperCase();
+    state.pairing = {
+      status: "pairing",
+      code,
+      command: `noecho pair ${code}`,
+      notice: error instanceof Error ? `local pairing fallback · ${error.message}` : "local pairing fallback"
+    };
+  }
+
+  render();
+}
+
+function markPaired() {
+  const project = selectedProject();
+  state.pairing = {
+    ...state.pairing,
+    status: "online",
+    notice: `${project.machine} connected · daemon v0.4.1`
+  };
+  state.activeView = "terminal";
   render();
 }
 
@@ -461,6 +534,68 @@ function renderPrompts() {
             </span>
           </button>
         `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderSetup() {
+  const project = selectedProject();
+  const paired = state.pairing.status === "online";
+
+  return `
+    <section class="panel setup-panel" aria-label="Setup">
+      <div class="panel-head">
+        <div>
+          <span class="panel-kicker">daemon setup</span>
+          <h2>${escapeHtml(project.path)} · ${escapeHtml(project.branch)}</h2>
+        </div>
+        <button class="mini-btn" type="button" data-setup-action="pair">${paired ? "paired" : "pair"}</button>
+      </div>
+      <div class="model-toggle" aria-label="Model toggle">
+        ${["codex", "claude", "gpt"].map((model) => `
+          <button class="${state.selectedModel === model ? `is-active ${model}` : ""}" type="button" data-model="${model}">
+            ${escapeHtml(model)}
+          </button>
+        `).join("")}
+      </div>
+      <div class="setup-grid">
+        <article class="setup-card">
+          <span class="section-label">1 · run daemon</span>
+          <code>$ npm i -g noecho<br>$ ${escapeHtml(state.pairing.command)}</code>
+          <p>${escapeHtml(state.pairing.notice)}</p>
+          <div class="pairing-code">${state.pairing.code ? escapeHtml(state.pairing.code) : "tap pair"}</div>
+          <button type="button" data-setup-action="${paired ? "terminal" : "paired"}">
+            ${paired ? "open terminal" : "simulate daemon online"}
+          </button>
+        </article>
+        <article class="setup-card">
+          <span class="section-label">2 · byok</span>
+          <div class="key-list">
+            ${byokKeys.map((key) => `
+              <div>
+                <span class="${escapeHtml(key.tone)}"></span>
+                <strong>${escapeHtml(key.label)}</strong>
+                <em>${escapeHtml(key.hint)}</em>
+                <code>${escapeHtml(key.value)}</code>
+              </div>
+            `).join("")}
+          </div>
+        </article>
+        <article class="setup-card">
+          <span class="section-label">3 · project</span>
+          <div class="project-list">
+            ${projects.map((item) => `
+              <button class="${item.id === state.selectedProjectId ? "is-active" : ""}" type="button" data-project-id="${escapeHtml(item.id)}">
+                <span>
+                  <strong>${escapeHtml(item.name)}</strong>
+                  <em>${escapeHtml(item.path)} · ${escapeHtml(item.branch)}</em>
+                </span>
+                <small>${escapeHtml(item.machine)}</small>
+              </button>
+            `).join("")}
+          </div>
+        </article>
       </div>
     </section>
   `;
@@ -606,6 +741,10 @@ function renderSettings() {
             <strong>${escapeHtml(value)}</strong>
           </button>
         `).join("")}
+        <button type="button" data-view="setup">
+          <span>setup</span>
+          <strong>daemon, BYOK, projects</strong>
+        </button>
       </div>
     </section>
   `;
@@ -614,11 +753,12 @@ function renderSettings() {
 function renderWorkspace(tab) {
   const walletConnected = state.wallet.status === "connected";
 
-  if (!walletConnected && state.activeView !== "settings") {
+  if (!walletConnected && state.activeView !== "settings" && state.activeView !== "setup") {
     return state.activeView === "spend" ? renderSpend() : renderTerminal(tab);
   }
 
   if (state.activeView === "prompts") return renderPrompts();
+  if (state.activeView === "setup") return renderSetup();
   if (state.activeView === "goal") return renderGoal();
   if (state.activeView === "approvals") return renderApprovals();
   if (state.activeView === "history") return renderHistory();
@@ -701,6 +841,34 @@ function bindEvents() {
         state.goalNotice = `${state.goalRunId} pause requested`;
         render();
       }
+    });
+  });
+
+  document.querySelectorAll("[data-setup-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.setupAction;
+      if (action === "pair") {
+        startPairing();
+      } else if (action === "paired") {
+        markPaired();
+      } else if (action === "terminal") {
+        state.activeView = "terminal";
+        render();
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-project-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedProjectId = button.dataset.projectId;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-model]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedModel = button.dataset.model;
+      render();
     });
   });
 }
