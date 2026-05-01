@@ -81,3 +81,11 @@ Implementation notes:
 - Added local persistence for wallet session, pairing state, selected project, and selected model.
 - Added polling for auth session, pairing, machines, goals, and MPP offers.
 - Replaced more mock setup, goal, and spend values with live API-backed state.
+
+## 2026-05-01 - Step 10 Live Terminal And Approvals Feed
+
+Implementation notes:
+
+- Added server-side live tab, terminal chunk, and approval stores with daemon sync endpoints.
+- Added daemon CLI demo streaming so local activity can be pushed into the phone cockpit.
+- Updated the PWA to read live tabs, terminal chunks, and approvals from the local server.

@@ -43,7 +43,7 @@ Status: implemented for local beta.
 
 ## Phase 6 - Daemon And Goal Mode
 
-Status: local foundation, setup flow, and phone sync in progress.
+Status: local foundation, setup flow, phone sync, and live terminal feed in progress.
 
 - Implement local/VPS daemon.
 - Add Claude Code, Codex, OpenCode, and shell adapters.

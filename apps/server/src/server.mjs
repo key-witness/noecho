@@ -10,6 +10,82 @@ const nonces = new Map();
 const sessions = new Map();
 const pairingCodes = new Map();
 const machines = new Map();
+const tabs = new Map([
+  ["codex-goal", {
+    id: "codex-goal",
+    machineId: "machine_demo_vps",
+    agent: "codex",
+    mode: "goal",
+    repo: "mip/noecho",
+    branch: "main",
+    machine: "vps-helix",
+    status: "running",
+    risk: "file-edit",
+    spendUsd: 2.18,
+    runtime: "3h 12m / 9h",
+    summary: "hardening pairing flow and worker checkpoints"
+  }],
+  ["claude-review", {
+    id: "claude-review",
+    machineId: "machine_demo_macbook",
+    agent: "claude",
+    mode: "review",
+    repo: "mip/noecho",
+    branch: "ui-step2",
+    machine: "macbook",
+    status: "approving",
+    risk: "push",
+    spendUsd: 0.42,
+    runtime: "18m",
+    summary: "review found 2 warnings in websocket retry logic"
+  }],
+  ["opencode-audit", {
+    id: "opencode-audit",
+    machineId: "machine_demo_vps",
+    agent: "opencode",
+    mode: "audit",
+    repo: "contracts/vault",
+    branch: "audit/prelaunch",
+    machine: "vps-helix",
+    status: "blocked",
+    risk: "shell",
+    spendUsd: 0.76,
+    runtime: "41m",
+    summary: "waiting for slither install approval"
+  }],
+  ["shell-local", {
+    id: "shell-local",
+    machineId: "machine_demo_macbook",
+    agent: "shell",
+    mode: "terminal",
+    repo: "local/noecho",
+    branch: "main",
+    machine: "macbook",
+    status: "idle",
+    risk: "safe",
+    spendUsd: 0,
+    runtime: "ready",
+    summary: "paired and ready for manual commands"
+  }]
+]);
+const terminalChunks = new Map([
+  ["codex-goal", [
+    { id: "chunk_01", tabId: "codex-goal", stream: "meta", chunk: "$ noecho goal start \"make mobile cockpit production ready\" --runtime 9h --budget 15", createdAt: new Date().toISOString() },
+    { id: "chunk_02", tabId: "codex-goal", stream: "stdout", chunk: "wallet verified 0x8f2c...91b4 · mpp session open", createdAt: new Date().toISOString() }
+  ]]
+]);
+const approvalRequests = new Map([
+  ["approval_slither", {
+    id: "approval_slither",
+    tabId: "opencode-audit",
+    title: "Install Slither on vps-helix",
+    detail: "opencode wants to run pipx install slither-analyzer for smart-contract audit tooling.",
+    risk: "shell",
+    amountUsd: 0,
+    createdAt: new Date().toISOString(),
+    status: "pending"
+  }]
+]);
 const goalRuns = new Map();
 const goalCheckpoints = new Map();
 const paidActions = [
@@ -147,6 +223,54 @@ function createPairing(input = {}) {
   return pairing;
 }
 
+function createApproval(input = {}) {
+  const approval = {
+    id: input.id || `approval_${randomUUID().split("-")[0]}`,
+    tabId: input.tabId || "codex-goal",
+    title: String(input.title || "Approval required"),
+    detail: String(input.detail || "Agent action requires approval."),
+    risk: String(input.risk || "safe"),
+    amountUsd: Number(input.amountUsd || 0),
+    createdAt: input.createdAt || new Date().toISOString(),
+    status: String(input.status || "pending")
+  };
+  approvalRequests.set(approval.id, approval);
+  return approval;
+}
+
+function appendTerminalChunk(input = {}) {
+  const chunk = {
+    id: input.id || `chunk_${randomUUID().split("-")[0]}`,
+    tabId: input.tabId || "codex-goal",
+    stream: input.stream || "stdout",
+    chunk: String(input.chunk || ""),
+    createdAt: input.createdAt || new Date().toISOString()
+  };
+  const items = terminalChunks.get(chunk.tabId) || [];
+  items.push(chunk);
+  terminalChunks.set(chunk.tabId, items.slice(-120));
+  return chunk;
+}
+
+function upsertTab(input = {}) {
+  const existing = tabs.get(input.id || "codex-goal") || {};
+  const next = {
+    ...existing,
+    ...input,
+    id: input.id || existing.id || "codex-goal",
+    machineId: input.machineId || existing.machineId || "machine_demo_vps",
+    agent: input.agent || existing.agent || "codex",
+    mode: input.mode || existing.mode || "goal",
+    repo: input.repo || existing.repo || "mip/noecho",
+    machine: input.machine || existing.machine || "vps-helix",
+    status: input.status || existing.status || "running",
+    risk: input.risk || existing.risk || "safe",
+    spendUsd: Number(input.spendUsd ?? existing.spendUsd ?? 0)
+  };
+  tabs.set(next.id, next);
+  return next;
+}
+
 function createGoalRun(input) {
   const id = `goal_${randomUUID().split("-")[0]}`;
   const now = new Date().toISOString();
@@ -173,6 +297,24 @@ function createGoalRun(input) {
   };
 
   goalRuns.set(id, run);
+  upsertTab({
+    id: input.tabId || "codex-goal",
+    agent: input.agent || "codex",
+    mode: "goal",
+    repo: "mip/noecho",
+    branch: "main",
+    machine: "vps-helix",
+    status: "running",
+    risk: "file-edit",
+    spendUsd: spendBudgetUsd,
+    runtime: `${Math.max(1, Math.round(runtimeBudgetMinutes / 60))}h target`,
+    summary: prompt
+  });
+  appendTerminalChunk({
+    tabId: input.tabId || "codex-goal",
+    stream: "meta",
+    chunk: `$ noecho goal start "${prompt}" --runtime ${runtimeBudgetMinutes}m --budget ${spendBudgetUsd}`
+  });
   goalCheckpoints.set(id, [
     {
       id: `checkpoint_${randomUUID().split("-")[0]}`,
@@ -197,7 +339,7 @@ createServer(async (req, res) => {
   }
 
   if (req.url === "/health") {
-    sendJson(res, 200, { ok: true, service: "noecho-server", phase: "step8-pairing-setup" });
+    sendJson(res, 200, { ok: true, service: "noecho-server", phase: "step10-live-terminal" });
     return;
   }
 
@@ -340,6 +482,38 @@ createServer(async (req, res) => {
     return;
   }
 
+  if (req.url === "/tabs" && req.method === "GET") {
+    sendJson(res, 200, { ok: true, tabs: [...tabs.values()] });
+    return;
+  }
+
+  const terminalMatch = req.url?.match(/^\/tabs\/([^/]+)\/terminal$/);
+  if (terminalMatch && req.method === "GET") {
+    const tabId = terminalMatch[1];
+    sendJson(res, 200, { ok: true, chunks: terminalChunks.get(tabId) || [] });
+    return;
+  }
+
+  if (req.url === "/approvals" && req.method === "GET") {
+    sendJson(res, 200, {
+      ok: true,
+      approvals: [...approvalRequests.values()].filter((approval) => approval.status !== "resolved")
+    });
+    return;
+  }
+
+  const resolveApprovalMatch = req.url?.match(/^\/approvals\/([^/]+)\/resolve$/);
+  if (resolveApprovalMatch && req.method === "POST") {
+    const approval = approvalRequests.get(resolveApprovalMatch[1]);
+    if (!approval) {
+      sendJson(res, 404, { ok: false, error: "approval not found" });
+      return;
+    }
+    approvalRequests.set(approval.id, { ...approval, status: "resolved" });
+    sendJson(res, 200, { ok: true, approval: { ...approval, status: "resolved" } });
+    return;
+  }
+
   if (req.url === "/goals" && req.method === "GET") {
     const runs = [...goalRuns.values()].map((run) => ({
       ...run,
@@ -383,6 +557,37 @@ createServer(async (req, res) => {
       goalCheckpoints.set(goalRunId, checkpoints);
       goalRuns.set(goalRunId, { ...run, updatedAt: checkpoint.createdAt });
       sendJson(res, 201, { ok: true, checkpoint });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
+    return;
+  }
+
+  if (req.url === "/daemon/sync" && req.method === "POST") {
+    try {
+      const body = await readJson(req);
+      const tab = body.tab ? upsertTab(body.tab) : null;
+      const chunks = Array.isArray(body.chunks) ? body.chunks.map((chunk) => appendTerminalChunk(chunk)) : [];
+      const approvals = Array.isArray(body.approvals) ? body.approvals.map((approval) => createApproval(approval)) : [];
+
+      if (body.goalCheckpoint?.goalRunId) {
+        const run = goalRuns.get(body.goalCheckpoint.goalRunId);
+        if (run) {
+          const checkpoint = {
+            id: `checkpoint_${randomUUID().split("-")[0]}`,
+            goalRunId: body.goalCheckpoint.goalRunId,
+            label: String(body.goalCheckpoint.label || "checkpoint"),
+            detail: String(body.goalCheckpoint.detail || "agent checkpoint"),
+            createdAt: new Date().toISOString()
+          };
+          const items = goalCheckpoints.get(run.id) || [];
+          items.push(checkpoint);
+          goalCheckpoints.set(run.id, items);
+          goalRuns.set(run.id, { ...run, updatedAt: checkpoint.createdAt });
+        }
+      }
+
+      sendJson(res, 200, { ok: true, tab, chunks, approvals });
     } catch (error) {
       sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
     }

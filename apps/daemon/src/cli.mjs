@@ -16,6 +16,7 @@ commands:
   noecho pair      create or complete a pairing code for the phone PWA
   noecho doctor    check local agent prerequisites
   noecho goal      manage long-running /goal jobs
+  noecho stream    send sample live activity to the local Noecho server
 `);
 }
 
@@ -217,6 +218,75 @@ function goal() {
   }
 }
 
+function streamHelp() {
+  console.log(`noecho stream
+
+commands:
+  noecho stream demo --server http://127.0.0.1:4010 --tab codex-goal
+`);
+}
+
+function streamDemo() {
+  const server = parseOption("--server", "http://127.0.0.1:4010");
+  const tabId = parseOption("--tab", "codex-goal");
+  const goalRunId = parseOption("--goal", "");
+
+  postJson(`${server.replace(/\/$/, "")}/daemon/sync`, {
+    tab: {
+      id: tabId,
+      agent: "codex",
+      mode: "goal",
+      repo: "mip/noecho",
+      branch: "main",
+      machine: "vps-helix",
+      status: "running",
+      risk: "file-edit",
+      spendUsd: 2.64,
+      runtime: "3h 41m / 9h",
+      summary: "streaming terminal progress from local daemon"
+    },
+    chunks: [
+      { tabId, stream: "meta", chunk: "$ codex goal continue --checkpoint" },
+      { tabId, stream: "stdout", chunk: "syncing live terminal chunks to phone cockpit" },
+      { tabId, stream: "stdout", chunk: "ran targeted UI checks for setup, goal, and spend" },
+      { tabId, stream: "stderr", chunk: "approval required · push branch after final review" }
+    ],
+    approvals: [
+      {
+        tabId,
+        title: "Push branch after live sync pass",
+        detail: "codex wants approval to push the updated cockpit sync changes after tests.",
+        risk: "push",
+        amountUsd: 0.04
+      }
+    ],
+    goalCheckpoint: goalRunId
+      ? {
+          goalRunId,
+          label: "live sync",
+          detail: "daemon posted terminal chunks and approval state to phone cockpit"
+        }
+      : undefined
+  })
+    .then(() => {
+      console.log(`streamed demo activity to ${server}`);
+    })
+    .catch((error) => {
+      console.error(error instanceof Error ? error.message : "stream failed");
+      process.exitCode = 1;
+    });
+}
+
+function stream() {
+  const subcommand = process.argv[3] || "help";
+
+  if (subcommand === "demo") {
+    streamDemo();
+  } else {
+    streamHelp();
+  }
+}
+
 switch (command) {
   case "pair":
     pair();
@@ -226,6 +296,9 @@ switch (command) {
     break;
   case "goal":
     goal();
+    break;
+  case "stream":
+    stream();
     break;
   default:
     printHelp();

@@ -14,6 +14,8 @@ const state = {
   goalNotice: "ready to start a 9h codex /goal run",
   goalRuns: [],
   goalCheckpoints: [],
+  tabs: [],
+  terminalChunks: [],
   pairing: {
     status: "idle",
     code: "",
@@ -22,6 +24,7 @@ const state = {
   },
   machines: [],
   availableOffers: [],
+  approvalFeed: [],
   selectedProjectId: "noecho",
   selectedModel: "codex"
 };
@@ -208,7 +211,8 @@ const views = [
 ];
 
 function activeTab() {
-  return agentTabs.find((tab) => tab.id === state.activeTabId) || agentTabs[0];
+  const liveTabs = state.tabs.length ? state.tabs : agentTabs;
+  return liveTabs.find((tab) => tab.id === state.activeTabId) || liveTabs[0];
 }
 
 function escapeHtml(value) {
@@ -221,7 +225,7 @@ function escapeHtml(value) {
 }
 
 function statusTone(status) {
-  if (status.includes("approval") || status === "blocked") return "warn";
+  if (status.includes("approval") || status.includes("approv") || status === "blocked") return "warn";
   if (status === "running") return "live";
   if (status === "idle") return "idle";
   return "ok";
@@ -372,7 +376,9 @@ async function syncServerState() {
   const requests = [
     fetchJson(`${authServerBase}/machines`).catch(() => ({ machines: [] })),
     fetchJson(`${authServerBase}/goals`).catch(() => ({ runs: [] })),
-    fetchJson(`${authServerBase}/mpp/offers`).catch(() => ({ actions: [] }))
+    fetchJson(`${authServerBase}/mpp/offers`).catch(() => ({ actions: [] })),
+    fetchJson(`${authServerBase}/tabs`).catch(() => ({ tabs: [] })),
+    fetchJson(`${authServerBase}/approvals`).catch(() => ({ approvals: [] }))
   ];
 
   if (state.wallet.sessionToken) {
@@ -387,11 +393,17 @@ async function syncServerState() {
     requests.push(Promise.resolve(null));
   }
 
-  const [machinesResponse, goalsResponse, offersResponse, sessionResponse, pairingResponse] = await Promise.all(requests);
+  const [machinesResponse, goalsResponse, offersResponse, tabsResponse, approvalsResponse, sessionResponse, pairingResponse] = await Promise.all(requests);
 
   state.machines = machinesResponse.machines || [];
   state.goalRuns = goalsResponse.runs || [];
   state.availableOffers = offersResponse.actions || [];
+  state.tabs = (tabsResponse.tabs || []).map((tab) => ({
+    ...tab,
+    branch: tab.branch || "main",
+    spend: tab.spendUsd ? `$${tab.spendUsd.toFixed(2)}` : "free"
+  }));
+  state.approvalFeed = approvalsResponse.approvals || [];
 
   const run = activeGoalRun();
   if (run) {
@@ -419,6 +431,12 @@ async function syncServerState() {
         ? `${pairingResponse.pairing.machineName} connected`
         : `expires ${new Date(pairingResponse.pairing.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
     };
+  }
+
+  const active = activeTab();
+  if (active?.id) {
+    const terminalResponse = await fetchJson(`${authServerBase}/tabs/${encodeURIComponent(active.id)}/terminal`).catch(() => ({ chunks: [] }));
+    state.terminalChunks = terminalResponse.chunks || [];
   }
 
   persistState();
@@ -596,7 +614,18 @@ async function startGoalRun() {
 }
 
 function renderTerminal(tab) {
-  const lines = terminalLines[tab.id] || terminalLines["codex-goal"];
+  const lines = state.terminalChunks.length
+    ? state.terminalChunks.map((chunk) => {
+      let tone = "dim";
+      if (chunk.stream === "stderr") tone = "warn";
+      else if (chunk.stream === "meta") tone = "info";
+      else if (String(chunk.chunk).includes("approval required")) tone = "warn";
+      else tone = "ok";
+      return [tone, chunk.chunk];
+    })
+    : (terminalLines[tab.id] || terminalLines["codex-goal"]);
+  const approvalCount = state.approvalFeed.length || approvals.length;
+
   return `
     <section class="panel terminal-panel" aria-label="Terminal">
       <div class="panel-head">
@@ -604,7 +633,7 @@ function renderTerminal(tab) {
           <span class="panel-kicker">live terminal</span>
           <h2>${escapeHtml(tab.repo)}</h2>
         </div>
-        <button class="mini-btn" type="button" data-view="approvals">approvals ${approvals.length}</button>
+        <button class="mini-btn" type="button" data-view="approvals">approvals ${approvalCount}</button>
       </div>
       <div class="status-rail" aria-label="Agent status">
         <span>heard</span>
@@ -776,6 +805,14 @@ function renderGoal() {
 }
 
 function renderApprovals() {
+  const approvalItems = state.approvalFeed.length
+    ? state.approvalFeed.map((approval) => ({
+      ...approval,
+      amount: `$${Number(approval.amountUsd || 0).toFixed(2)}`,
+      tab: approval.tabId || "codex"
+    }))
+    : approvals;
+
   return `
     <section class="panel" aria-label="Approval inbox">
       <div class="panel-head">
@@ -786,7 +823,7 @@ function renderApprovals() {
         <button class="mini-btn danger" type="button">panic stop</button>
       </div>
       <div class="approval-list">
-        ${approvals.map((approval) => `
+        ${approvalItems.map((approval) => `
           <article class="approval-card">
             <div class="approval-card__meta">
               <span>${escapeHtml(approval.tab)}</span>
@@ -795,7 +832,7 @@ function renderApprovals() {
             <h3>${escapeHtml(approval.title)}</h3>
             <p>${escapeHtml(approval.detail)}</p>
             <div class="approval-actions">
-              <button type="button">approve</button>
+              <button type="button" data-approval-action="resolve" data-approval-id="${escapeHtml(approval.id || "")}">approve</button>
               <button type="button">edit</button>
               <button type="button">reject</button>
             </div>
@@ -896,7 +933,7 @@ function renderSettings() {
 function renderWorkspace(tab) {
   const walletConnected = state.wallet.status === "connected";
 
-  if (!walletConnected && state.activeView !== "settings" && state.activeView !== "setup" && state.activeView !== "goal") {
+  if (!walletConnected && state.activeView !== "settings" && state.activeView !== "setup" && state.activeView !== "goal" && state.activeView !== "approvals") {
     return state.activeView === "spend" ? renderSpend() : renderTerminal(tab);
   }
 
@@ -1016,6 +1053,15 @@ function bindEvents() {
       state.selectedModel = button.dataset.model;
       persistState();
       render();
+    });
+  });
+
+  document.querySelectorAll("[data-approval-action='resolve']").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const approvalId = button.dataset.approvalId;
+      if (!approvalId) return;
+      await fetchJson(`${authServerBase}/approvals/${encodeURIComponent(approvalId)}/resolve`, { method: "POST" }).catch(() => {});
+      syncServerState().catch(() => {});
     });
   });
 }
