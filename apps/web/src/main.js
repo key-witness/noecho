@@ -12,17 +12,23 @@ const state = {
   authNotice: "wallet login is the default entry point",
   goalRunId: "",
   goalNotice: "ready to start a 9h codex /goal run",
+  goalRuns: [],
+  goalCheckpoints: [],
   pairing: {
     status: "idle",
     code: "",
     command: "noecho pair",
     notice: "run the daemon on your laptop or VPS"
   },
+  machines: [],
+  availableOffers: [],
   selectedProjectId: "noecho",
   selectedModel: "codex"
 };
 
 const authServerBase = "http://127.0.0.1:4010";
+const storageKey = "noecho-phone-state-v1";
+let syncTimer = null;
 
 const agentTabs = [
   {
@@ -328,6 +334,105 @@ function selectedProject() {
   return projects.find((project) => project.id === state.selectedProjectId) || projects[0];
 }
 
+function activeGoalRun() {
+  return state.goalRuns.find((run) => run.id === state.goalRunId) || state.goalRuns[0] || null;
+}
+
+function persistState() {
+  localStorage.setItem(storageKey, JSON.stringify({
+    wallet: state.wallet,
+    authNotice: state.authNotice,
+    goalRunId: state.goalRunId,
+    goalNotice: state.goalNotice,
+    pairing: state.pairing,
+    selectedProjectId: state.selectedProjectId,
+    selectedModel: state.selectedModel
+  }));
+}
+
+function hydrateState() {
+  const raw = localStorage.getItem(storageKey);
+  if (!raw) return;
+
+  try {
+    const saved = JSON.parse(raw);
+    if (saved.wallet) state.wallet = { ...state.wallet, ...saved.wallet };
+    if (saved.authNotice) state.authNotice = saved.authNotice;
+    if (saved.goalRunId) state.goalRunId = saved.goalRunId;
+    if (saved.goalNotice) state.goalNotice = saved.goalNotice;
+    if (saved.pairing) state.pairing = { ...state.pairing, ...saved.pairing };
+    if (saved.selectedProjectId) state.selectedProjectId = saved.selectedProjectId;
+    if (saved.selectedModel) state.selectedModel = saved.selectedModel;
+  } catch {
+    localStorage.removeItem(storageKey);
+  }
+}
+
+async function syncServerState() {
+  const requests = [
+    fetchJson(`${authServerBase}/machines`).catch(() => ({ machines: [] })),
+    fetchJson(`${authServerBase}/goals`).catch(() => ({ runs: [] })),
+    fetchJson(`${authServerBase}/mpp/offers`).catch(() => ({ actions: [] }))
+  ];
+
+  if (state.wallet.sessionToken) {
+    requests.push(fetchJson(`${authServerBase}/auth/session?token=${encodeURIComponent(state.wallet.sessionToken)}`).catch(() => null));
+  } else {
+    requests.push(Promise.resolve(null));
+  }
+
+  if (state.pairing.code) {
+    requests.push(fetchJson(`${authServerBase}/pairing/${encodeURIComponent(state.pairing.code)}`).catch(() => null));
+  } else {
+    requests.push(Promise.resolve(null));
+  }
+
+  const [machinesResponse, goalsResponse, offersResponse, sessionResponse, pairingResponse] = await Promise.all(requests);
+
+  state.machines = machinesResponse.machines || [];
+  state.goalRuns = goalsResponse.runs || [];
+  state.availableOffers = offersResponse.actions || [];
+
+  const run = activeGoalRun();
+  if (run) {
+    state.goalRunId = run.id;
+    state.goalCheckpoints = run.checkpoints || [];
+    state.goalNotice = `${run.id} running · checkpoints every ${run.checkpointIntervalMinutes}m`;
+  }
+
+  if (sessionResponse?.session) {
+    state.wallet = {
+      ...state.wallet,
+      status: "connected",
+      address: sessionResponse.session.address || state.wallet.address,
+      profileId: sessionResponse.session.profileId || state.wallet.profileId
+    };
+  }
+
+  if (pairingResponse?.pairing) {
+    state.pairing = {
+      ...state.pairing,
+      status: pairingResponse.pairing.status,
+      code: pairingResponse.pairing.code,
+      command: pairingResponse.pairing.command,
+      notice: pairingResponse.pairing.status === "online"
+        ? `${pairingResponse.pairing.machineName} connected`
+        : `expires ${new Date(pairingResponse.pairing.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+    };
+  }
+
+  persistState();
+  render();
+}
+
+function startSyncLoop() {
+  if (syncTimer) window.clearInterval(syncTimer);
+  syncServerState().catch(() => {});
+  syncTimer = window.setInterval(() => {
+    syncServerState().catch(() => {});
+  }, 5000);
+}
+
 async function connectWallet() {
   state.authNotice = "requesting wallet signature...";
   render();
@@ -384,6 +489,8 @@ async function connectWallet() {
     state.authNotice = error instanceof Error ? error.message : "wallet login failed";
   }
 
+  persistState();
+  startSyncLoop();
   render();
 }
 
@@ -398,6 +505,8 @@ function connectDemoWallet() {
   };
   state.authNotice = "demo wallet session ready";
   state.activeView = "setup";
+  persistState();
+  startSyncLoop();
   render();
 }
 
@@ -434,6 +543,7 @@ async function startPairing() {
     };
   }
 
+  persistState();
   render();
 }
 
@@ -445,6 +555,7 @@ function markPaired() {
     notice: `${project.machine} connected · daemon v0.4.1`
   };
   state.activeView = "terminal";
+  persistState();
   render();
 }
 
@@ -472,12 +583,15 @@ async function startGoalRun() {
       })
     });
     state.goalRunId = response.run.id;
+    state.goalRuns = [response.run, ...(state.goalRuns || [])];
+    state.goalCheckpoints = response.checkpoints || [];
     state.goalNotice = `${response.run.id} running · checkpoints every 30m`;
   } catch (error) {
     state.goalRunId = `local_${crypto.randomUUID().split("-")[0]}`;
     state.goalNotice = error instanceof Error ? `local fallback · ${error.message}` : "local fallback goal started";
   }
 
+  persistState();
   render();
 }
 
@@ -542,6 +656,14 @@ function renderPrompts() {
 function renderSetup() {
   const project = selectedProject();
   const paired = state.pairing.status === "online";
+  const machineRows = state.machines.length
+    ? state.machines.map((machine) => `
+      <div class="machine-row">
+        <strong>${escapeHtml(machine.name)}</strong>
+        <small>${escapeHtml(machine.status)}</small>
+      </div>
+    `).join("")
+    : `<div class="machine-row"><strong>no machine yet</strong><small>waiting</small></div>`;
 
   return `
     <section class="panel setup-panel" aria-label="Setup">
@@ -565,6 +687,7 @@ function renderSetup() {
           <code>$ npm i -g noecho<br>$ ${escapeHtml(state.pairing.command)}</code>
           <p>${escapeHtml(state.pairing.notice)}</p>
           <div class="pairing-code">${state.pairing.code ? escapeHtml(state.pairing.code) : "tap pair"}</div>
+          <div class="machine-list">${machineRows}</div>
           <button type="button" data-setup-action="${paired ? "terminal" : "paired"}">
             ${paired ? "open terminal" : "simulate daemon online"}
           </button>
@@ -602,7 +725,17 @@ function renderSetup() {
 }
 
 function renderGoal() {
-  const hasRun = Boolean(state.goalRunId);
+  const run = activeGoalRun();
+  const hasRun = Boolean(run);
+  const checkpointsToShow = state.goalCheckpoints.length
+    ? state.goalCheckpoints.map((checkpoint) => ({
+      time: new Date(checkpoint.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      title: checkpoint.label,
+      detail: checkpoint.detail
+    }))
+    : checkpoints;
+  const runtimeLabel = run ? `${Math.max(1, Math.round(run.runtimeBudgetMinutes / 60))}h target` : "3h 12m / 9h";
+  const budgetLabel = run ? `$0.00 / $${run.spendBudgetUsd}` : "$2.18 / $15";
 
   return `
     <section class="panel" aria-label="Goal run">
@@ -619,16 +752,16 @@ function renderGoal() {
       <div class="goal-meter">
         <div>
           <span>runtime</span>
-          <strong>3h 12m / 9h</strong>
+          <strong>${escapeHtml(runtimeLabel)}</strong>
         </div>
         <div>
           <span>budget</span>
-          <strong>$2.18 / $15</strong>
+          <strong>${escapeHtml(budgetLabel)}</strong>
         </div>
       </div>
       <div class="progress"><span style="width:36%"></span></div>
       <div class="checkpoint-list">
-        ${checkpoints.map((checkpoint) => `
+        ${checkpointsToShow.map((checkpoint) => `
           <article>
             <time>${escapeHtml(checkpoint.time)}</time>
             <div>
@@ -697,6 +830,22 @@ function renderHistory() {
 }
 
 function renderSpend() {
+  const offers = state.availableOffers.length
+    ? state.availableOffers.map((offer) => `
+      <article>
+        <strong>${escapeHtml(offer.title)}</strong>
+        <span>${escapeHtml(offer.intent)} · ${escapeHtml(offer.method)}</span>
+        <small>$${escapeHtml(offer.amount)}</small>
+      </article>
+    `).join("")
+    : receipts.map((receipt) => `
+      <article>
+        <strong>${escapeHtml(receipt.label)}</strong>
+        <span>${escapeHtml(receipt.detail)}</span>
+        <small>${escapeHtml(receipt.amount)}</small>
+      </article>
+    `).join("");
+
   return `
     <section class="panel" aria-label="Spend">
       <div class="panel-head">
@@ -712,13 +861,7 @@ function renderSpend() {
         <div><span>hour cap</span><strong>$4.00</strong></div>
       </div>
       <div class="list-stack">
-        ${receipts.map((receipt) => `
-          <article>
-            <strong>${escapeHtml(receipt.label)}</strong>
-            <span>${escapeHtml(receipt.detail)}</span>
-            <small>${escapeHtml(receipt.amount)}</small>
-          </article>
-        `).join("")}
+        ${offers}
       </div>
     </section>
   `;
@@ -753,7 +896,7 @@ function renderSettings() {
 function renderWorkspace(tab) {
   const walletConnected = state.wallet.status === "connected";
 
-  if (!walletConnected && state.activeView !== "settings" && state.activeView !== "setup") {
+  if (!walletConnected && state.activeView !== "settings" && state.activeView !== "setup" && state.activeView !== "goal") {
     return state.activeView === "spend" ? renderSpend() : renderTerminal(tab);
   }
 
@@ -827,6 +970,7 @@ function bindEvents() {
         navigator.clipboard?.writeText(state.wallet.address).catch(() => {});
       } else if (action === "session" && state.wallet.sessionToken) {
         state.authNotice = `session ${state.wallet.sessionToken.slice(0, 8)}...`;
+        persistState();
         render();
       }
     });
@@ -839,6 +983,7 @@ function bindEvents() {
         startGoalRun();
       } else if (action === "pause") {
         state.goalNotice = `${state.goalRunId} pause requested`;
+        persistState();
         render();
       }
     });
@@ -861,6 +1006,7 @@ function bindEvents() {
   document.querySelectorAll("[data-project-id]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedProjectId = button.dataset.projectId;
+      persistState();
       render();
     });
   });
@@ -868,12 +1014,15 @@ function bindEvents() {
   document.querySelectorAll("[data-model]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedModel = button.dataset.model;
+      persistState();
       render();
     });
   });
 }
 
+hydrateState();
 render();
+startSyncLoop();
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});

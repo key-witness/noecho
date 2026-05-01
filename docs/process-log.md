@@ -73,3 +73,11 @@ Implementation notes:
 - Preserved the prototype's blue-black terminal styling and voice-first copy.
 - Added local pairing endpoints and daemon completion support.
 - Added the PWA setup view for daemon pairing, BYOK key state, model selection, and project/branch selection.
+
+## 2026-05-01 - Step 9 Live Phone Sync
+
+Implementation notes:
+
+- Added local persistence for wallet session, pairing state, selected project, and selected model.
+- Added polling for auth session, pairing, machines, goals, and MPP offers.
+- Replaced more mock setup, goal, and spend values with live API-backed state.

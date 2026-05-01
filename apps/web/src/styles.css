@@ -614,7 +614,8 @@ h3 {
 }
 
 .key-list,
-.project-list {
+.project-list,
+.machine-list {
   display: grid;
   gap: 8px;
 }
@@ -690,6 +691,16 @@ h3 {
   text-align: left;
 }
 
+.machine-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 10px;
+}
+
 .project-list button span {
   min-width: 0;
 }
@@ -697,6 +708,24 @@ h3 {
 .project-list button.is-active {
   border-color: rgba(107, 138, 171, 0.42);
   background: rgba(107, 138, 171, 0.12);
+}
+
+.machine-row strong,
+.machine-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.machine-row strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.machine-row small {
+  color: var(--green);
+  font-size: 9px;
+  text-transform: uppercase;
 }
 
 .prompt-row,
