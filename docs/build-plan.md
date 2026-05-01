@@ -14,6 +14,8 @@ Status: in progress.
 
 ## Phase 2 - Phone PWA Shell
 
+Status: first mock implemented.
+
 - Replace the static scaffold with the real mobile cockpit.
 - Implement agent tabs, terminal panel, prompt deck, approvals, history, spend, settings, and `/goal` screens with mocked data.
 

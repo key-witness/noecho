@@ -15,3 +15,14 @@ Implementation notes:
 - Used only the Keywitness Noecho UI/demo as design references.
 - Kept the scaffold dependency-light so checks run without network installs.
 - Added placeholder web, daemon, server, packages, Supabase migration, Docker Compose, and docs.
+
+## 2026-05-01 - Step 2 PWA Cockpit Mock
+
+Visual thesis: a dense phone terminal with iTerm-like agent tabs, wallet/spend controls, and a bottom voice command dock.
+
+Implementation notes:
+
+- Replaced the first placeholder shell with an interactive mocked cockpit.
+- Added multi-agent tabs for Codex, Claude, OpenCode, and shell.
+- Added workspace views for terminal, prompts, `/goal`, approvals, history, spend, and settings.
+- Kept implementation dependency-light in vanilla JS/CSS so Step 2 remains fast and easy to inspect.
