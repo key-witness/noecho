@@ -15,3 +15,4 @@ tmp/
 .vercel/
 .supabase/
 output/
+.noecho/

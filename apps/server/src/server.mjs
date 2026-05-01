@@ -6,6 +6,8 @@ const port = Number(process.env.PORT || 4010);
 const origin = process.env.NOECHO_WEB_ORIGIN || "http://127.0.0.1:3002";
 const nonces = new Map();
 const sessions = new Map();
+const goalRuns = new Map();
+const goalCheckpoints = new Map();
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
@@ -41,6 +43,44 @@ function readJson(req) {
     });
     req.on("error", reject);
   });
+}
+
+function createGoalRun(input) {
+  const id = `goal_${randomUUID().split("-")[0]}`;
+  const now = new Date().toISOString();
+  const prompt = String(input.prompt || "").trim();
+  const runtimeBudgetMinutes = Number(input.runtimeBudgetMinutes || 540);
+  const spendBudgetUsd = Number(input.spendBudgetUsd || 15);
+  const checkpointIntervalMinutes = Number(input.checkpointIntervalMinutes || 30);
+
+  if (!prompt) {
+    throw new Error("prompt is required");
+  }
+
+  const run = {
+    id,
+    tabId: input.tabId || "codex-goal",
+    agent: input.agent || "codex",
+    prompt,
+    runtimeBudgetMinutes,
+    spendBudgetUsd,
+    checkpointIntervalMinutes,
+    status: "running",
+    createdAt: now,
+    updatedAt: now
+  };
+
+  goalRuns.set(id, run);
+  goalCheckpoints.set(id, [
+    {
+      id: `checkpoint_${randomUUID().split("-")[0]}`,
+      goalRunId: id,
+      label: "started",
+      detail: "goal accepted by local Noecho server",
+      createdAt: now
+    }
+  ]);
+  return run;
 }
 
 createServer(async (req, res) => {
@@ -126,6 +166,55 @@ createServer(async (req, res) => {
     const token = url.searchParams.get("token");
     const session = token ? sessions.get(token) : null;
     sendJson(res, session ? 200 : 404, session ? { ok: true, session } : { ok: false, error: "session not found" });
+    return;
+  }
+
+  if (req.url === "/goals" && req.method === "GET") {
+    const runs = [...goalRuns.values()].map((run) => ({
+      ...run,
+      checkpoints: goalCheckpoints.get(run.id) || []
+    }));
+    sendJson(res, 200, { ok: true, runs });
+    return;
+  }
+
+  if (req.url === "/goals" && req.method === "POST") {
+    try {
+      const body = await readJson(req);
+      const run = createGoalRun(body);
+      sendJson(res, 201, { ok: true, run, checkpoints: goalCheckpoints.get(run.id) || [] });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
+    return;
+  }
+
+  const checkpointMatch = req.url?.match(/^\/goals\/([^/]+)\/checkpoints$/);
+  if (checkpointMatch && req.method === "POST") {
+    try {
+      const goalRunId = checkpointMatch[1];
+      const run = goalRuns.get(goalRunId);
+      if (!run) {
+        sendJson(res, 404, { ok: false, error: "goal not found" });
+        return;
+      }
+
+      const body = await readJson(req);
+      const checkpoint = {
+        id: `checkpoint_${randomUUID().split("-")[0]}`,
+        goalRunId,
+        label: String(body.label || "checkpoint"),
+        detail: String(body.detail || "agent checkpoint"),
+        createdAt: new Date().toISOString()
+      };
+      const checkpoints = goalCheckpoints.get(goalRunId) || [];
+      checkpoints.push(checkpoint);
+      goalCheckpoints.set(goalRunId, checkpoints);
+      goalRuns.set(goalRunId, { ...run, updatedAt: checkpoint.createdAt });
+      sendJson(res, 201, { ok: true, checkpoint });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
     return;
   }
 

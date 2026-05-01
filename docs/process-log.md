@@ -49,3 +49,11 @@ Implementation notes:
 - Added `viem` for EIP-191 message verification.
 - Added server routes for nonce creation, signature verification, and session lookup.
 - Added a wallet identity strip and connect/demo-mode flow to the PWA cockpit.
+
+## 2026-05-01 - Step 6 Goal Mode Foundation
+
+Implementation notes:
+
+- Added local server endpoints for creating goal runs and appending checkpoints.
+- Added a PWA `/goal` start action for a 9-hour Codex run with a $15 cap.
+- Expanded the daemon CLI so self-hosted users can create, inspect, and checkpoint goal runs in local state.

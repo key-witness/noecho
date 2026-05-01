@@ -9,7 +9,9 @@ const state = {
     profileId: "",
     mode: "wallet"
   },
-  authNotice: "wallet login is the default entry point"
+  authNotice: "wallet login is the default entry point",
+  goalRunId: "",
+  goalNotice: "ready to start a 9h codex /goal run"
 };
 
 const authServerBase = "http://127.0.0.1:4010";
@@ -373,6 +375,39 @@ function connectDemoWallet() {
   render();
 }
 
+async function startGoalRun() {
+  if (state.wallet.status !== "connected") {
+    state.goalNotice = "connect wallet or demo mode before starting /goal";
+    state.activeView = "goal";
+    render();
+    return;
+  }
+
+  state.goalNotice = "starting codex /goal...";
+  render();
+
+  try {
+    const response = await fetchJson(`${authServerBase}/goals`, {
+      method: "POST",
+      body: JSON.stringify({
+        tabId: "codex-goal",
+        agent: "codex",
+        prompt: "make mobile cockpit production ready",
+        runtimeBudgetMinutes: 540,
+        spendBudgetUsd: 15,
+        checkpointIntervalMinutes: 30
+      })
+    });
+    state.goalRunId = response.run.id;
+    state.goalNotice = `${response.run.id} running · checkpoints every 30m`;
+  } catch (error) {
+    state.goalRunId = `local_${crypto.randomUUID().split("-")[0]}`;
+    state.goalNotice = error instanceof Error ? `local fallback · ${error.message}` : "local fallback goal started";
+  }
+
+  render();
+}
+
 function renderTerminal(tab) {
   const lines = terminalLines[tab.id] || terminalLines["codex-goal"];
   return `
@@ -432,6 +467,8 @@ function renderPrompts() {
 }
 
 function renderGoal() {
+  const hasRun = Boolean(state.goalRunId);
+
   return `
     <section class="panel" aria-label="Goal run">
       <div class="panel-head">
@@ -439,8 +476,11 @@ function renderGoal() {
           <span class="panel-kicker">long run</span>
           <h2>/goal production-ready mobile cockpit</h2>
         </div>
-        <button class="mini-btn danger" type="button">pause</button>
+        <button class="mini-btn ${hasRun ? "danger" : ""}" type="button" data-goal-action="${hasRun ? "pause" : "start"}">
+          ${hasRun ? "pause" : "start 9h"}
+        </button>
       </div>
+      <p class="goal-notice">${escapeHtml(state.goalNotice)}</p>
       <div class="goal-meter">
         <div>
           <span>runtime</span>
@@ -647,6 +687,18 @@ function bindEvents() {
         navigator.clipboard?.writeText(state.wallet.address).catch(() => {});
       } else if (action === "session" && state.wallet.sessionToken) {
         state.authNotice = `session ${state.wallet.sessionToken.slice(0, 8)}...`;
+        render();
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-goal-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.goalAction;
+      if (action === "start") {
+        startGoalRun();
+      } else if (action === "pause") {
+        state.goalNotice = `${state.goalRunId} pause requested`;
         render();
       }
     });

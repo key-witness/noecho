@@ -560,6 +560,14 @@ h3 {
   padding: 12px;
 }
 
+.goal-notice {
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  padding: 11px 13px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .spend-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
