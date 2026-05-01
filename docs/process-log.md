@@ -41,3 +41,11 @@ Implementation notes:
 - Added a second Supabase migration for hosted-beta tables that were missing from the scaffold.
 - Added an auth ownership helper and RLS policies keyed off `profiles.auth_user_id`.
 - Kept donations nullable so supporter flows can exist before full auth is wired.
+
+## 2026-05-01 - Step 5 Wallet-First Login
+
+Implementation notes:
+
+- Added `viem` for EIP-191 message verification.
+- Added server routes for nonce creation, signature verification, and session lookup.
+- Added a wallet identity strip and connect/demo-mode flow to the PWA cockpit.

@@ -4,7 +4,7 @@ This repo follows the Noecho product plan from the Keywitness planning session.
 
 ## Phase 1 - Scaffold
 
-Status: in progress.
+Status: complete.
 
 - Create a clean product repo.
 - Add app and package workspaces.
@@ -21,30 +21,38 @@ Status: first mock implemented.
 
 ## Phase 3 - Protocol
 
-Status: in progress.
+Status: complete.
 
 - Add zod schemas for machines, tabs, events, prompts, approvals, goals, spend limits, and MPP receipts.
 
 ## Phase 4 - Hosted Beta
 
-Status: in progress.
+Status: first migration complete.
 
 - Add Supabase wallet profiles, QR pairing, daemon sync, and event streaming.
 - Keep Vercel/Supabase free-tier usage lean.
 - Keep paid MPP actions feature-flagged until commercial hosting is ready.
 
-## Phase 5 - Daemon And Goal Mode
+## Phase 5 - Wallet Login
+
+Status: implemented for local beta.
+
+- Add wallet-first nonce/signature verification.
+- Keep demo mode available for users without an injected wallet.
+- Store the verified wallet session in the phone cockpit state until Supabase auth is wired.
+
+## Phase 6 - Daemon And Goal Mode
 
 - Implement local/VPS daemon.
 - Add Claude Code, Codex, OpenCode, and shell adapters.
 - Implement long-running `/goal` with checkpoints, approvals, and phone disconnect tolerance.
 
-## Phase 6 - MPP Monetization
+## Phase 7 - MPP Monetization
 
 - Add MPP-protected endpoints for hosted transcription, prompt packs, reviews, scans, deploy assist, and goal budgets.
 - Store receipts and expose spend controls.
 
-## Phase 7 - Self-Hosted Edition
+## Phase 8 - Self-Hosted Edition
 
 - Make the Docker server path work without Supabase.
 - Allow MPP to be disabled or configured by the self-hosted operator.

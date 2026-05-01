@@ -6,5 +6,8 @@
   "scripts": {
     "build": "node ../../scripts/check-workspaces.mjs build:server",
     "dev": "node src/server.mjs"
+  },
+  "dependencies": {
+    "viem": "^2.48.7"
   }
 }

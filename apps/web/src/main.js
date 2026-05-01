@@ -1,8 +1,18 @@
 const state = {
   activeTabId: "codex-goal",
   activeView: "terminal",
-  recording: false
+  recording: false,
+  wallet: {
+    status: "disconnected",
+    address: "",
+    sessionToken: "",
+    profileId: "",
+    mode: "wallet"
+  },
+  authNotice: "wallet login is the default entry point"
 };
+
+const authServerBase = "http://127.0.0.1:4010";
 
 const agentTabs = [
   {
@@ -188,6 +198,11 @@ function statusTone(status) {
   return "ok";
 }
 
+function walletLabel() {
+  if (!state.wallet.address) return "wallet";
+  return `${state.wallet.address.slice(0, 6)}...${state.wallet.address.slice(-4)}`;
+}
+
 function renderHeader(tab) {
   return `
     <header class="topbar">
@@ -195,9 +210,9 @@ function renderHeader(tab) {
         <p class="eyebrow">phone cockpit</p>
         <h1>noecho</h1>
       </div>
-      <button class="wallet" type="button" data-view="spend">
-        <span>0x8f2c</span>
-        <strong>$12.82</strong>
+      <button class="wallet ${state.wallet.status === "connected" ? "is-connected" : ""}" type="button" data-view="spend">
+        <span>${escapeHtml(state.wallet.status === "connected" ? walletLabel() : "wallet")}</span>
+        <strong>${escapeHtml(state.wallet.status === "connected" ? state.wallet.mode : "$12.82")}</strong>
       </button>
     </header>
     <section class="session-strip" aria-label="Current session">
@@ -212,6 +227,29 @@ function renderHeader(tab) {
       <div>
         <span class="session-strip__label">risk</span>
         <strong>${escapeHtml(tab.risk)}</strong>
+      </div>
+    </section>
+  `;
+}
+
+function renderWalletPanel() {
+  const connected = state.wallet.status === "connected";
+
+  return `
+    <section class="wallet-panel ${connected ? "is-connected" : ""}" aria-label="Wallet session">
+      <div>
+        <span class="panel-kicker">identity</span>
+        <h2>${connected ? "wallet connected" : "connect wallet to start"}</h2>
+      </div>
+      <p>${escapeHtml(connected ? `${state.wallet.address} · ${state.wallet.profileId}` : state.authNotice)}</p>
+      <div class="wallet-actions">
+        ${connected ? `
+          <button type="button" data-wallet-action="copy">copy address</button>
+          <button type="button" data-wallet-action="session">session</button>
+        ` : `
+          <button type="button" data-wallet-action="connect">connect wallet</button>
+          <button type="button" data-wallet-action="demo">demo mode</button>
+        `}
       </div>
     </section>
   `;
@@ -245,6 +283,94 @@ function renderViewNav() {
       `).join("")}
     </nav>
   `;
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, {
+    headers: { "content-type": "application/json", ...(options.headers || {}) },
+    ...options
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || `request failed with ${response.status}`);
+  }
+  return data;
+}
+
+function walletAddressFixture() {
+  return state.wallet.address || "0x8f2c8d7e7d0d8f2c8d7e7d0d8f2c8d7e7d0d8f2c";
+}
+
+async function connectWallet() {
+  state.authNotice = "requesting wallet signature...";
+  render();
+
+  try {
+    let address = walletAddressFixture();
+    let signature = "";
+    let message = "";
+    let sessionToken = "";
+    let profileId = "";
+
+    if (window.ethereum) {
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      address = accounts?.[0] || address;
+      const nonceResponse = await fetchJson(`${authServerBase}/auth/nonce?address=${encodeURIComponent(address)}`);
+      message = nonceResponse.message;
+      signature = await window.ethereum.request({
+        method: "personal_sign",
+        params: [message, address]
+      });
+      const verifyResponse = await fetchJson(`${authServerBase}/auth/verify`, {
+        method: "POST",
+        body: JSON.stringify({
+          address,
+          message,
+          nonce: nonceResponse.nonce,
+          signature
+        })
+      });
+      sessionToken = verifyResponse.sessionToken;
+      profileId = verifyResponse.profileId;
+    } else {
+      profileId = `profile_${address.toLowerCase().slice(2, 10)}`;
+      sessionToken = `demo_${crypto.randomUUID()}`;
+    }
+
+    state.wallet = {
+      status: "connected",
+      address,
+      sessionToken,
+      profileId,
+      mode: window.ethereum ? "real" : "demo"
+    };
+    state.activeView = "terminal";
+    state.authNotice = window.ethereum ? "wallet session verified" : "demo wallet session ready";
+  } catch (error) {
+    state.wallet = {
+      status: "disconnected",
+      address: "",
+      sessionToken: "",
+      profileId: "",
+      mode: "wallet"
+    };
+    state.authNotice = error instanceof Error ? error.message : "wallet login failed";
+  }
+
+  render();
+}
+
+function connectDemoWallet() {
+  const address = walletAddressFixture();
+  state.wallet = {
+    status: "connected",
+    address,
+    sessionToken: `demo_${crypto.randomUUID()}`,
+    profileId: `profile_${address.toLowerCase().slice(2, 10)}`,
+    mode: "demo"
+  };
+  state.authNotice = "demo wallet session ready";
+  render();
 }
 
 function renderTerminal(tab) {
@@ -446,6 +572,12 @@ function renderSettings() {
 }
 
 function renderWorkspace(tab) {
+  const walletConnected = state.wallet.status === "connected";
+
+  if (!walletConnected && state.activeView !== "settings") {
+    return state.activeView === "spend" ? renderSpend() : renderTerminal(tab);
+  }
+
   if (state.activeView === "prompts") return renderPrompts();
   if (state.activeView === "goal") return renderGoal();
   if (state.activeView === "approvals") return renderApprovals();
@@ -471,6 +603,7 @@ function render() {
   document.querySelector("#app").innerHTML = `
     <section class="phone">
       ${renderHeader(tab)}
+      ${renderWalletPanel()}
       ${renderTabs()}
       ${renderViewNav()}
       <main class="workspace">
@@ -501,6 +634,22 @@ function bindEvents() {
   document.querySelector("[data-voice]")?.addEventListener("click", () => {
     state.recording = !state.recording;
     render();
+  });
+
+  document.querySelectorAll("[data-wallet-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.walletAction;
+      if (action === "connect") {
+        connectWallet();
+      } else if (action === "demo") {
+        connectDemoWallet();
+      } else if (action === "copy" && state.wallet.address) {
+        navigator.clipboard?.writeText(state.wallet.address).catch(() => {});
+      } else if (action === "session" && state.wallet.sessionToken) {
+        state.authNotice = `session ${state.wallet.sessionToken.slice(0, 8)}...`;
+        render();
+      }
+    });
   });
 }
 
