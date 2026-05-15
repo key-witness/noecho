@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const agentKinds = ["claude-code", "codex", "opencode", "shell"] as const;
+export const agentKinds = ["claude", "claude-code", "codex", "opencode", "shell"] as const;
 export const agentModes = ["chat", "terminal", "review", "goal"] as const;
 export const agentStatuses = ["idle", "running", "blocked", "approving", "failed", "done"] as const;
 export const riskLevels = ["safe", "file-edit", "shell", "deploy", "payment", "signing"] as const;
@@ -9,6 +9,9 @@ export const eventKinds = ["heard", "planned", "edited", "tested", "blocked", "r
 export const walletChains = ["eip155", "solana"] as const;
 export const mppIntents = ["charge", "session"] as const;
 export const mppMethods = ["tempo", "stripe", "manual"] as const;
+export const roomParticipantKinds = ["user", "agent"] as const;
+export const roomMessageAuthorKinds = ["user", "agent", "system"] as const;
+export const roomWorkStatuses = ["pending", "claimed", "completed", "failed"] as const;
 
 export const WalletIdentitySchema = z.object({
   id: z.string().min(1),
@@ -136,6 +139,51 @@ export const MppOfferSchema = z.object({
   method: z.enum(mppMethods)
 });
 
+export const ModelRoomSchema = z.object({
+  id: z.string().min(1),
+  profileId: z.string().min(1),
+  title: z.string().min(1),
+  goalRunId: z.string().optional(),
+  status: z.string().min(1),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const RoomParticipantSchema = z.object({
+  id: z.string().min(1),
+  roomId: z.string().min(1),
+  kind: z.enum(roomParticipantKinds),
+  label: z.string().min(1),
+  agent: z.string().min(1),
+  status: z.string().min(1),
+  createdAt: z.string().datetime()
+});
+
+export const RoomMessageSchema = z.object({
+  id: z.string().min(1),
+  roomId: z.string().min(1),
+  workId: z.string().optional(),
+  authorKind: z.enum(roomMessageAuthorKinds),
+  authorLabel: z.string().min(1),
+  agent: z.string().optional(),
+  body: z.string().min(1),
+  priority: z.enum(["high", "normal"]).default("normal"),
+  createdAt: z.string().datetime()
+});
+
+export const RoomWorkItemSchema = z.object({
+  id: z.string().min(1),
+  roomId: z.string().min(1),
+  messageId: z.string().min(1),
+  participantId: z.string().min(1),
+  agent: z.string().min(1),
+  prompt: z.string().min(1),
+  priority: z.enum(["high", "normal"]),
+  status: z.enum(roomWorkStatuses),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
 export type AgentKind = z.infer<typeof AgentTabSchema>["agent"];
 export type AgentMode = z.infer<typeof AgentTabSchema>["mode"];
 export type AgentStatus = z.infer<typeof AgentTabSchema>["status"];
@@ -155,6 +203,10 @@ export type GoalCheckpoint = z.infer<typeof GoalCheckpointSchema>;
 export type SpendLimit = z.infer<typeof SpendLimitSchema>;
 export type MppReceipt = z.infer<typeof MppReceiptSchema>;
 export type MppOffer = z.infer<typeof MppOfferSchema>;
+export type ModelRoom = z.infer<typeof ModelRoomSchema>;
+export type RoomParticipant = z.infer<typeof RoomParticipantSchema>;
+export type RoomMessage = z.infer<typeof RoomMessageSchema>;
+export type RoomWorkItem = z.infer<typeof RoomWorkItemSchema>;
 
 export const parseWalletIdentity = (input: unknown) => WalletIdentitySchema.parse(input);
 export const parseMachine = (input: unknown) => MachineSchema.parse(input);
@@ -170,6 +222,10 @@ export const parseGoalCheckpoint = (input: unknown) => GoalCheckpointSchema.pars
 export const parseSpendLimit = (input: unknown) => SpendLimitSchema.parse(input);
 export const parseMppReceipt = (input: unknown) => MppReceiptSchema.parse(input);
 export const parseMppOffer = (input: unknown) => MppOfferSchema.parse(input);
+export const parseModelRoom = (input: unknown) => ModelRoomSchema.parse(input);
+export const parseRoomParticipant = (input: unknown) => RoomParticipantSchema.parse(input);
+export const parseRoomMessage = (input: unknown) => RoomMessageSchema.parse(input);
+export const parseRoomWorkItem = (input: unknown) => RoomWorkItemSchema.parse(input);
 
 export function createProtocolFixtures() {
   const now = new Date().toISOString();
@@ -233,6 +289,24 @@ export function createProtocolFixtures() {
       targetAgents: ["codex", "claude-code"],
       risk: "file-edit",
       template: "Inspect the build failure, make the smallest fix, and rerun the command."
+    },
+    modelRoom: {
+      id: "room_01",
+      profileId: "profile_01",
+      title: "Noecho build room",
+      goalRunId: "goal_01",
+      status: "active",
+      createdAt: now,
+      updatedAt: now
+    },
+    roomMessage: {
+      id: "message_01",
+      roomId: "room_01",
+      authorKind: "user",
+      authorLabel: "You",
+      body: "Codex and Claude, continue the hosted MVP.",
+      priority: "high",
+      createdAt: now
     }
   } satisfies {
     walletIdentity: WalletIdentity;
@@ -242,5 +316,7 @@ export function createProtocolFixtures() {
     agentEvent: AgentEvent;
     goalRun: GoalRun;
     promptMacro: PromptMacro;
+    modelRoom: ModelRoom;
+    roomMessage: RoomMessage;
   };
 }

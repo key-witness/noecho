@@ -25,11 +25,21 @@ const state = {
   machines: [],
   availableOffers: [],
   approvalFeed: [],
+  rooms: [],
+  activeRoomId: "",
+  roomParticipants: [],
+  roomMessages: [],
+  roomDraft: "",
+  roomNotice: "create a model room and add codex or claude",
+  roomPending: false,
   selectedProjectId: "noecho",
-  selectedModel: "codex"
+  selectedModel: "codex",
+  commandDraft: "",
+  commandPending: false,
+  commandNotice: ""
 };
 
-const authServerBase = "http://127.0.0.1:4010";
+const authServerBase = window.NOECHO_API_BASE || new URLSearchParams(window.location.search).get("api") || "http://127.0.0.1:4010";
 const storageKey = "noecho-phone-state-v1";
 let syncTimer = null;
 
@@ -201,6 +211,7 @@ const settings = [
 
 const views = [
   ["setup", "setup"],
+  ["room", "room"],
   ["terminal", "terminal"],
   ["prompts", "prompts"],
   ["goal", "/goal"],
@@ -330,6 +341,14 @@ async function fetchJson(url, options = {}) {
   return data;
 }
 
+function sessionHeaders(extra = {}) {
+  if (!state.wallet.sessionToken) return extra;
+  return {
+    Authorization: `Bearer ${state.wallet.sessionToken}`,
+    ...extra
+  };
+}
+
 function walletAddressFixture() {
   return state.wallet.address || "0x8f2c8d7e7d0d8f2c8d7e7d0d8f2c8d7e7d0d8f2c";
 }
@@ -342,6 +361,10 @@ function activeGoalRun() {
   return state.goalRuns.find((run) => run.id === state.goalRunId) || state.goalRuns[0] || null;
 }
 
+function activeRoom() {
+  return state.rooms.find((room) => room.id === state.activeRoomId) || state.rooms[0] || null;
+}
+
 function persistState() {
   localStorage.setItem(storageKey, JSON.stringify({
     wallet: state.wallet,
@@ -349,6 +372,7 @@ function persistState() {
     goalRunId: state.goalRunId,
     goalNotice: state.goalNotice,
     pairing: state.pairing,
+    activeRoomId: state.activeRoomId,
     selectedProjectId: state.selectedProjectId,
     selectedModel: state.selectedModel
   }));
@@ -365,6 +389,7 @@ function hydrateState() {
     if (saved.goalRunId) state.goalRunId = saved.goalRunId;
     if (saved.goalNotice) state.goalNotice = saved.goalNotice;
     if (saved.pairing) state.pairing = { ...state.pairing, ...saved.pairing };
+    if (saved.activeRoomId) state.activeRoomId = saved.activeRoomId;
     if (saved.selectedProjectId) state.selectedProjectId = saved.selectedProjectId;
     if (saved.selectedModel) state.selectedModel = saved.selectedModel;
   } catch {
@@ -382,9 +407,15 @@ async function syncServerState() {
   ];
 
   if (state.wallet.sessionToken) {
-    requests.push(fetchJson(`${authServerBase}/auth/session?token=${encodeURIComponent(state.wallet.sessionToken)}`).catch(() => null));
+    requests.push(fetchJson(`${authServerBase}/auth/session`, {
+      headers: sessionHeaders()
+    }).catch(() => null));
+    requests.push(fetchJson(`${authServerBase}/rooms`, {
+      headers: sessionHeaders()
+    }).catch(() => ({ rooms: [] })));
   } else {
     requests.push(Promise.resolve(null));
+    requests.push(Promise.resolve({ rooms: [] }));
   }
 
   if (state.pairing.code) {
@@ -393,7 +424,7 @@ async function syncServerState() {
     requests.push(Promise.resolve(null));
   }
 
-  const [machinesResponse, goalsResponse, offersResponse, tabsResponse, approvalsResponse, sessionResponse, pairingResponse] = await Promise.all(requests);
+  const [machinesResponse, goalsResponse, offersResponse, tabsResponse, approvalsResponse, sessionResponse, roomsResponse, pairingResponse] = await Promise.all(requests);
 
   state.machines = machinesResponse.machines || [];
   state.goalRuns = goalsResponse.runs || [];
@@ -404,6 +435,10 @@ async function syncServerState() {
     spend: tab.spendUsd ? `$${tab.spendUsd.toFixed(2)}` : "free"
   }));
   state.approvalFeed = approvalsResponse.approvals || [];
+  state.rooms = roomsResponse.rooms || [];
+  if (!state.activeRoomId && state.rooms[0]) {
+    state.activeRoomId = state.rooms[0].id;
+  }
 
   const run = activeGoalRun();
   if (run) {
@@ -437,6 +472,15 @@ async function syncServerState() {
   if (active?.id) {
     const terminalResponse = await fetchJson(`${authServerBase}/tabs/${encodeURIComponent(active.id)}/terminal`).catch(() => ({ chunks: [] }));
     state.terminalChunks = terminalResponse.chunks || [];
+  }
+
+  const room = activeRoom();
+  if (room?.id && state.wallet.sessionToken) {
+    const roomResponse = await fetchJson(`${authServerBase}/rooms/${encodeURIComponent(room.id)}/messages`, {
+      headers: sessionHeaders()
+    }).catch(() => ({ participants: [], messages: [] }));
+    state.roomParticipants = roomResponse.participants || [];
+    state.roomMessages = roomResponse.messages || [];
   }
 
   persistState();
@@ -539,6 +583,7 @@ async function startPairing() {
   try {
     const response = await fetchJson(`${authServerBase}/pairing/start`, {
       method: "POST",
+      headers: sessionHeaders(),
       body: JSON.stringify({
         profileId: state.wallet.profileId || "profile_demo",
         machineName: selectedProject().machine
@@ -591,6 +636,7 @@ async function startGoalRun() {
   try {
     const response = await fetchJson(`${authServerBase}/goals`, {
       method: "POST",
+      headers: sessionHeaders(),
       body: JSON.stringify({
         tabId: "codex-goal",
         agent: "codex",
@@ -613,7 +659,153 @@ async function startGoalRun() {
   render();
 }
 
+async function dispatchTerminalCommand() {
+  const tab = activeTab();
+  const command = state.commandDraft.trim();
+
+  if (!tab?.id) {
+    state.commandNotice = "no active tab selected";
+    render();
+    return;
+  }
+
+  if (!command) {
+    state.commandNotice = "type or hold mic to speak";
+    render();
+    return;
+  }
+
+  state.commandPending = true;
+  state.commandNotice = `dispatching to ${tab.machine}...`;
+  render();
+
+  try {
+    await fetchJson(`${authServerBase}/tabs/${encodeURIComponent(tab.id)}/commands`, {
+      method: "POST",
+      headers: sessionHeaders(),
+      body: JSON.stringify({
+        command,
+        source: state.recording ? "voice" : "typed",
+        projectId: state.selectedProjectId,
+        projectPath: selectedProject().path,
+        model: state.selectedModel
+      })
+    });
+
+    state.commandDraft = "";
+    state.recording = false;
+    state.commandNotice = `queued for ${tab.machine}`;
+    persistState();
+    await syncServerState().catch(() => {});
+  } catch (error) {
+    state.commandNotice = error instanceof Error ? error.message : "dispatch failed";
+  } finally {
+    state.commandPending = false;
+    render();
+  }
+}
+
+async function createModelRoom() {
+  if (state.wallet.status !== "connected") {
+    state.roomNotice = "connect wallet or demo mode before creating a room";
+    state.activeView = "room";
+    render();
+    return;
+  }
+
+  state.roomPending = true;
+  state.roomNotice = "creating model room...";
+  render();
+
+  try {
+    const response = await fetchJson(`${authServerBase}/rooms`, {
+      method: "POST",
+      headers: sessionHeaders(),
+      body: JSON.stringify({
+        title: "Noecho build room",
+        agents: ["codex", "codex", "claude"]
+      })
+    });
+    state.activeRoomId = response.room.id;
+    state.rooms = [response.room, ...state.rooms.filter((room) => room.id !== response.room.id)];
+    state.roomParticipants = response.participants || [];
+    state.roomMessages = response.messages || [];
+    state.roomNotice = "room ready";
+    persistState();
+  } catch (error) {
+    state.roomNotice = error instanceof Error ? error.message : "room create failed";
+  } finally {
+    state.roomPending = false;
+    render();
+  }
+}
+
+async function addRoomAgent(agent) {
+  const room = activeRoom();
+  if (!room?.id) {
+    await createModelRoom();
+    return;
+  }
+
+  try {
+    const response = await fetchJson(`${authServerBase}/rooms/${encodeURIComponent(room.id)}/participants`, {
+      method: "POST",
+      headers: sessionHeaders(),
+      body: JSON.stringify({ agent, label: agent })
+    });
+    state.roomParticipants = [...state.roomParticipants, response.participant];
+    state.roomNotice = `${agent} added`;
+  } catch (error) {
+    state.roomNotice = error instanceof Error ? error.message : "add agent failed";
+  }
+  render();
+}
+
+async function sendRoomMessage() {
+  const room = activeRoom();
+  const body = state.roomDraft.trim();
+  if (!room?.id) {
+    state.roomNotice = "create a room first";
+    render();
+    return;
+  }
+  if (!body) {
+    state.roomNotice = "type a prompt for the room";
+    render();
+    return;
+  }
+
+  state.roomPending = true;
+  state.roomNotice = "broadcasting to models...";
+  render();
+
+  try {
+    const targetAgents = state.roomParticipants
+      .filter((participant) => participant.kind === "agent")
+      .map((participant) => participant.agent);
+    const response = await fetchJson(`${authServerBase}/rooms/${encodeURIComponent(room.id)}/messages`, {
+      method: "POST",
+      headers: sessionHeaders(),
+      body: JSON.stringify({
+        body,
+        targetAgents
+      })
+    });
+    state.roomDraft = "";
+    state.roomMessages = [...state.roomMessages, response.message];
+    state.roomNotice = `${response.workItems?.length || 0} agent jobs queued`;
+    persistState();
+    await syncServerState().catch(() => {});
+  } catch (error) {
+    state.roomNotice = error instanceof Error ? error.message : "message failed";
+  } finally {
+    state.roomPending = false;
+    render();
+  }
+}
+
 function renderTerminal(tab) {
+  const commandValue = state.commandDraft || (state.recording ? "continue fixing, but ask before push" : "");
   const lines = state.terminalChunks.length
     ? state.terminalChunks.map((chunk) => {
       let tone = "dim";
@@ -645,11 +837,56 @@ function renderTerminal(tab) {
       <div class="terminal-window" role="log" aria-label="Terminal output">
         ${lines.map(([tone, line]) => `<div class="term-line ${tone}">${escapeHtml(line)}</div>`).join("")}
       </div>
-      <div class="command-bar">
+      <form class="command-bar" data-command-form>
         <span>$</span>
-        <input value="${state.recording ? "continue fixing, but ask before push" : ""}" placeholder="type or hold mic to speak">
-        <button type="button">send</button>
+        <input value="${escapeHtml(commandValue)}" placeholder="type or hold mic to speak" data-command-input>
+        <button type="submit">${state.commandPending ? "..." : "send"}</button>
+      </form>
+      ${state.commandNotice ? `<p class="command-note">${escapeHtml(state.commandNotice)}</p>` : ""}
+    </section>
+  `;
+}
+
+function renderRoom() {
+  const room = activeRoom();
+  const participants = state.roomParticipants.length
+    ? state.roomParticipants
+    : room?.participants || [];
+  const messages = state.roomMessages.length
+    ? state.roomMessages
+    : (room?.latestMessage ? [room.latestMessage] : []);
+  const participantSummary = participants.length
+    ? participants.map((participant) => participant.label || participant.agent).join(" · ")
+    : "no participants";
+
+  return `
+    <section class="panel room-panel" aria-label="Model room">
+      <div class="panel-head">
+        <div>
+          <span class="panel-kicker">multiplayer models</span>
+          <h2>${escapeHtml(room?.title || "model room")}</h2>
+        </div>
+        <button class="mini-btn" type="button" data-room-action="create">${room ? "new room" : "create"}</button>
       </div>
+      <p class="room-note">${escapeHtml(state.roomNotice)}</p>
+      <div class="participant-bar" aria-label="Room participants">
+        <span>${escapeHtml(participantSummary)}</span>
+        <button type="button" data-room-agent="codex">+ codex</button>
+        <button type="button" data-room-agent="claude">+ claude</button>
+      </div>
+      <div class="room-timeline" role="log" aria-label="Room messages">
+        ${messages.map((message) => `
+          <article class="room-message ${escapeHtml(message.authorKind || "user")}">
+            <span>${escapeHtml(message.authorLabel || message.agent || "agent")}</span>
+            <p>${escapeHtml(message.body)}</p>
+            <small>${escapeHtml(message.priority || "normal")}</small>
+          </article>
+        `).join("") || `<article class="room-message system"><span>Noecho</span><p>Create a room, then send a prompt to Codex and Claude.</p><small>ready</small></article>`}
+      </div>
+      <form class="room-composer" data-room-form>
+        <textarea data-room-input placeholder="ask the group to work on the next noecho task">${escapeHtml(state.roomDraft)}</textarea>
+        <button type="submit">${state.roomPending ? "..." : "send to room"}</button>
+      </form>
     </section>
   `;
 }
@@ -939,6 +1176,7 @@ function renderWorkspace(tab) {
 
   if (state.activeView === "prompts") return renderPrompts();
   if (state.activeView === "setup") return renderSetup();
+  if (state.activeView === "room") return renderRoom();
   if (state.activeView === "goal") return renderGoal();
   if (state.activeView === "approvals") return renderApprovals();
   if (state.activeView === "history") return renderHistory();
@@ -993,7 +1231,42 @@ function bindEvents() {
 
   document.querySelector("[data-voice]")?.addEventListener("click", () => {
     state.recording = !state.recording;
+    if (state.recording && !state.commandDraft.trim()) {
+      state.commandDraft = "continue fixing, but ask before push";
+    }
     render();
+  });
+
+  document.querySelector("[data-command-input]")?.addEventListener("input", (event) => {
+    state.commandDraft = event.target.value;
+    state.commandNotice = "";
+  });
+
+  document.querySelector("[data-command-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await dispatchTerminalCommand();
+  });
+
+  document.querySelector("[data-room-input]")?.addEventListener("input", (event) => {
+    state.roomDraft = event.target.value;
+    state.roomNotice = "";
+  });
+
+  document.querySelector("[data-room-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await sendRoomMessage();
+  });
+
+  document.querySelectorAll("[data-room-action='create']").forEach((button) => {
+    button.addEventListener("click", () => {
+      createModelRoom();
+    });
+  });
+
+  document.querySelectorAll("[data-room-agent]").forEach((button) => {
+    button.addEventListener("click", () => {
+      addRoomAgent(button.dataset.roomAgent);
+    });
   });
 
   document.querySelectorAll("[data-wallet-action]").forEach((button) => {
@@ -1060,7 +1333,10 @@ function bindEvents() {
     button.addEventListener("click", async () => {
       const approvalId = button.dataset.approvalId;
       if (!approvalId) return;
-      await fetchJson(`${authServerBase}/approvals/${encodeURIComponent(approvalId)}/resolve`, { method: "POST" }).catch(() => {});
+      await fetchJson(`${authServerBase}/approvals/${encodeURIComponent(approvalId)}/resolve`, {
+        method: "POST",
+        headers: sessionHeaders()
+      }).catch(() => {});
       syncServerState().catch(() => {});
     });
   });

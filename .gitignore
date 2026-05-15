@@ -14,5 +14,7 @@ coverage/
 tmp/
 .vercel/
 .supabase/
+supabase/.temp/
 output/
 .noecho/
+.vercel

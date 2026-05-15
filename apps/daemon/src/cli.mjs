@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
@@ -17,6 +18,7 @@ commands:
   noecho doctor    check local agent prerequisites
   noecho goal      manage long-running /goal jobs
   noecho stream    send sample live activity to the local Noecho server
+  noecho room      claim model-room work for codex and claude
 `);
 }
 
@@ -33,6 +35,12 @@ function writeState(state) {
   writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
 }
 
+function machineTokenHeaders() {
+  const state = readState();
+  const machineToken = state.machineToken || parseOption("--machine-token", process.env.NOECHO_MACHINE_TOKEN || "");
+  return machineToken ? { "x-noecho-machine-token": machineToken } : {};
+}
+
 function parseOption(name, fallback) {
   const index = process.argv.indexOf(name);
   if (index === -1) return fallback;
@@ -44,20 +52,23 @@ function parseHours(value) {
   return Number(String(value).replace("h", ""));
 }
 
-function postJson(url, payload) {
+function requestJson(url, { method = "GET", body, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify(payload);
     const target = new URL(url);
+    const payload = body === undefined ? "" : JSON.stringify(body);
     const req = request(
       {
         hostname: target.hostname,
         port: target.port,
-        path: target.pathname,
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(body)
-        }
+        path: `${target.pathname}${target.search}`,
+        method,
+        headers: payload
+          ? {
+              "content-type": "application/json",
+              "content-length": Buffer.byteLength(payload),
+              ...headers
+            }
+          : Object.keys(headers).length ? headers : undefined
       },
       (res) => {
         let responseBody = "";
@@ -77,8 +88,19 @@ function postJson(url, payload) {
     );
 
     req.on("error", reject);
-    req.end(body);
+    if (payload) {
+      req.write(payload);
+    }
+    req.end();
   });
+}
+
+function postJson(url, payload) {
+  return requestJson(url, { method: "POST", body: payload });
+}
+
+function postJsonWithMachine(url, payload) {
+  return requestJson(url, { method: "POST", body: payload, headers: machineTokenHeaders() });
 }
 
 function pair() {
@@ -101,7 +123,16 @@ function pair() {
     publicKey: `ssh-ed25519 ${code} noecho-${machineName}`
   })
     .then((data) => {
+      const state = readState();
+      writeState({
+        ...state,
+        machineId: data.machine.id,
+        machineName: data.machine.name,
+        machineToken: data.machineToken,
+        server
+      });
       console.log(`paired: ${data.machine.name} (${data.machine.id})`);
+      console.log(`machine token stored in ${statePath}`);
     })
     .catch((error) => {
       console.error(error instanceof Error ? error.message : "pairing failed");
@@ -231,7 +262,7 @@ function streamDemo() {
   const tabId = parseOption("--tab", "codex-goal");
   const goalRunId = parseOption("--goal", "");
 
-  postJson(`${server.replace(/\/$/, "")}/daemon/sync`, {
+  postJsonWithMachine(`${server.replace(/\/$/, "")}/daemon/sync`, {
     tab: {
       id: tabId,
       agent: "codex",
@@ -287,6 +318,214 @@ function stream() {
   }
 }
 
+function dispatchHelp() {
+  console.log(`noecho dispatch
+
+commands:
+  noecho dispatch once --server http://127.0.0.1:4010 --tab shell-local
+  noecho dispatch loop --server http://127.0.0.1:4010 --tab shell-local --interval 2
+`);
+}
+
+function runShellCommand(commandText) {
+  return new Promise((resolve) => {
+    const child = spawn(process.env.SHELL || "zsh", ["-lc", commandText], {
+      cwd: process.cwd(),
+      env: process.env
+    });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+
+    child.on("error", (error) => {
+      stderr += `${error.message}\n`;
+      resolve({ exitCode: 1, stdout, stderr });
+    });
+
+    child.on("close", (code) => {
+      resolve({ exitCode: Number(code ?? 1), stdout, stderr });
+    });
+  });
+}
+
+async function dispatchOnce() {
+  const server = parseOption("--server", "http://127.0.0.1:4010");
+  const tabId = parseOption("--tab", "shell-local");
+  const executor = parseOption("--executor", "local-daemon");
+  const claimResponse = await postJsonWithMachine(`${server.replace(/\/$/, "")}/tabs/${encodeURIComponent(tabId)}/commands/claim`, {
+    executor
+  });
+  const commandItem = claimResponse.command;
+
+  if (!commandItem) {
+    console.log(`no pending commands for ${tabId}`);
+    return;
+  }
+
+  console.log(`running ${commandItem.id}: ${commandItem.command}`);
+  const result = await runShellCommand(commandItem.command);
+  await postJsonWithMachine(`${server.replace(/\/$/, "")}/commands/${encodeURIComponent(commandItem.id)}/complete`, {
+    status: result.exitCode === 0 ? "completed" : "failed",
+    exitCode: result.exitCode,
+    stdout: result.stdout,
+    stderr: result.stderr
+  });
+  console.log(`finished ${commandItem.id} with exit ${result.exitCode}`);
+}
+
+function roomHelp() {
+  console.log(`noecho room
+
+commands:
+  noecho room once --server http://127.0.0.1:4010 --room room_id --agents codex,claude
+  noecho room loop --server http://127.0.0.1:4010 --room room_id --agents codex,claude --interval 2
+`);
+}
+
+function simulatedAgentReply(work) {
+  const agent = work.agent || "agent";
+  const prompt = work.prompt || "";
+  if (/push|deploy|install|secret|payment|spend|rm |delete/i.test(prompt)) {
+    return {
+      body: `${agent}: I need approval before I run the requested risky step.`,
+      proposedAction: {
+        title: `${agent} wants approval`,
+        detail: prompt,
+        risk: /deploy/i.test(prompt) ? "deploy" : /payment|spend/i.test(prompt) ? "payment" : "shell",
+        amountUsd: 0
+      }
+    };
+  }
+
+  return {
+    body: `${agent}: acknowledged. I would inspect the repo, make the smallest change, and report back with tests.`
+  };
+}
+
+async function runAgentWork(work) {
+  if (process.env.NOECHO_EXECUTE_AGENTS !== "true") {
+    return simulatedAgentReply(work);
+  }
+
+  const agent = work.agent || "agent";
+  const prompt = work.prompt || "";
+  const commandText = agent === "claude"
+    ? `claude -p ${JSON.stringify(prompt)}`
+    : agent === "codex"
+      ? `codex exec ${JSON.stringify(prompt)}`
+      : "";
+
+  if (!commandText) {
+    return simulatedAgentReply(work);
+  }
+
+  const result = await runShellCommand(commandText);
+  return {
+    body: result.exitCode === 0
+      ? `${agent}: ${result.stdout || "completed"}`
+      : `${agent}: command failed\n${result.stderr || result.stdout}`,
+    proposedAction: undefined
+  };
+}
+
+async function roomOnce() {
+  const server = parseOption("--server", process.env.NOECHO_SERVER_URL || "http://127.0.0.1:4010");
+  const roomId = parseOption("--room", "");
+  const agents = parseOption("--agents", "codex,claude").split(",").map((item) => item.trim()).filter(Boolean);
+  const executor = parseOption("--executor", readState().machineName || "local-daemon");
+
+  if (!roomId) {
+    console.error("room id is required");
+    process.exitCode = 1;
+    return;
+  }
+
+  const claimResponse = await postJsonWithMachine(`${server.replace(/\/$/, "")}/daemon/rooms/${encodeURIComponent(roomId)}/work/claim`, {
+    executor,
+    agents
+  });
+  const work = claimResponse.work;
+
+  if (!work) {
+    console.log(`no pending room work for ${roomId}`);
+    return;
+  }
+
+  console.log(`claimed ${work.id} for ${work.agent}`);
+  const reply = await runAgentWork(work);
+  await postJsonWithMachine(`${server.replace(/\/$/, "")}/daemon/work/${encodeURIComponent(work.id)}/complete`, {
+    status: "completed",
+    authorLabel: work.agent,
+    body: reply.body,
+    proposedAction: reply.proposedAction
+  });
+  console.log(`completed ${work.id}`);
+}
+
+function roomLoop() {
+  const intervalSeconds = Number(parseOption("--interval", "2"));
+  const tick = async () => {
+    try {
+      await roomOnce();
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : "room loop failed");
+    }
+  };
+  tick();
+  setInterval(tick, Math.max(1, intervalSeconds) * 1000);
+}
+
+function room() {
+  const subcommand = process.argv[3] || "help";
+  if (subcommand === "once") {
+    roomOnce().catch((error) => {
+      console.error(error instanceof Error ? error.message : "room failed");
+      process.exitCode = 1;
+    });
+  } else if (subcommand === "loop") {
+    roomLoop();
+  } else {
+    roomHelp();
+  }
+}
+
+function dispatchLoop() {
+  const intervalSeconds = Number(parseOption("--interval", "2"));
+
+  const tick = async () => {
+    try {
+      await dispatchOnce();
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : "dispatch failed");
+    }
+  };
+
+  tick();
+  setInterval(tick, Math.max(1, intervalSeconds) * 1000);
+}
+
+function dispatch() {
+  const subcommand = process.argv[3] || "help";
+
+  if (subcommand === "once") {
+    dispatchOnce().catch((error) => {
+      console.error(error instanceof Error ? error.message : "dispatch failed");
+      process.exitCode = 1;
+    });
+  } else if (subcommand === "loop") {
+    dispatchLoop();
+  } else {
+    dispatchHelp();
+  }
+}
+
 switch (command) {
   case "pair":
     pair();
@@ -299,6 +538,12 @@ switch (command) {
     break;
   case "stream":
     stream();
+    break;
+  case "dispatch":
+    dispatch();
+    break;
+  case "room":
+    room();
     break;
   default:
     printHelp();

@@ -27,9 +27,9 @@ Status: complete.
 
 ## Phase 4 - Hosted Beta
 
-Status: migration and local pairing API complete.
+Status: migration, local pairing API, and standalone hosted plan complete.
 
-- Add Supabase wallet profiles, QR pairing, daemon sync, and event streaming.
+- Add Supabase wallet profiles, QR pairing, daemon sync, model rooms, and event streaming.
 - Keep Vercel/Supabase free-tier usage lean.
 - Keep paid MPP actions feature-flagged until commercial hosting is ready.
 
@@ -43,11 +43,19 @@ Status: implemented for local beta.
 
 ## Phase 6 - Daemon And Goal Mode
 
-Status: local foundation, setup flow, phone sync, and live terminal feed in progress.
+Status: local foundation, setup flow, phone sync, live terminal feed, and model-room work queue in progress.
 
 - Implement local/VPS daemon.
-- Add Claude Code, Codex, OpenCode, and shell adapters.
+- Add Claude, Codex, and shell adapters.
 - Implement long-running `/goal` with checkpoints, approvals, and phone disconnect tolerance.
+
+## Phase 6.5 - Multiplayer Model Rooms
+
+Status: first polling-based MVP implemented.
+
+- Add full chat-style rooms with user, Codex, and Claude participants.
+- Broadcast user prompts as high-priority daemon work.
+- Let daemon agents post room messages and create approval requests for risky actions.
 
 ## Phase 7 - MPP Monetization
 

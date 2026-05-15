@@ -1,11 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { verifyMessage } from "viem";
+import { createStateStore } from "./supabase-state.mjs";
 
 const port = Number(process.env.PORT || 4010);
+const host = process.env.HOST || process.env.NOECHO_HOST || "127.0.0.1";
 const origin = process.env.NOECHO_WEB_ORIGIN || "http://127.0.0.1:3002";
 const publicBaseUrl = process.env.NOECHO_PUBLIC_BASE_URL || `http://127.0.0.1:${port}`;
+const stateDir = join(process.cwd(), ".noecho");
+const statePath = join(stateDir, "server-state.json");
+const stateStore = createStateStore();
 const mppEnabled = process.env.NOECHO_MPP_ENABLED === "true";
+const allowDemoSessions = process.env.NOECHO_ALLOW_DEMO_SESSIONS !== "false";
+const daemonAuthRequired = process.env.NOECHO_DAEMON_AUTH_REQUIRED === "true";
 const nonces = new Map();
 const sessions = new Map();
 const pairingCodes = new Map();
@@ -86,8 +95,14 @@ const approvalRequests = new Map([
     status: "pending"
   }]
 ]);
+const commandDispatches = new Map();
 const goalRuns = new Map();
 const goalCheckpoints = new Map();
+const rooms = new Map();
+const roomParticipants = new Map();
+const roomMessages = new Map();
+const roomWorkItems = new Map();
+let activeProfileId = null;
 const paidActions = [
   {
     id: "prompt-pack-vibe",
@@ -122,8 +137,8 @@ function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": origin,
-    "access-control-allow-headers": "authorization,content-type,x-mpp-receipt",
-    "access-control-allow-methods": "GET,POST,OPTIONS"
+    "access-control-allow-headers": "authorization,content-type,x-mpp-receipt,x-noecho-machine-token",
+    "access-control-allow-methods": "GET,POST,DELETE,OPTIONS"
   });
   res.end(JSON.stringify(payload));
 }
@@ -177,6 +192,99 @@ function sendPaymentRequired(res, action) {
   });
 }
 
+function getRequestSessionToken(req) {
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")) {
+    return authHeader.slice(7).trim();
+  }
+
+  const headerToken = req.headers["x-noecho-session-token"];
+  if (typeof headerToken === "string" && headerToken.trim()) {
+    return headerToken.trim();
+  }
+
+  return null;
+}
+
+function getPersistedSessionForRequest(req) {
+  const token = getRequestSessionToken(req);
+  if (!token) return null;
+  return sessions.get(token) || null;
+}
+
+function getAuthorizedSession(req) {
+  const token = getRequestSessionToken(req);
+  if (!token) return null;
+
+  const session = sessions.get(token);
+  if (session) return session;
+
+  if (allowDemoSessions && token.startsWith("demo_")) {
+    return {
+      sessionToken: token,
+      profileId: "profile_demo",
+      address: "",
+      createdAt: new Date().toISOString(),
+      demo: true
+    };
+  }
+
+  return null;
+}
+
+function requireSession(req, res, { allowDemo = true } = {}) {
+  const session = getAuthorizedSession(req);
+  if (!session) {
+    sendJson(res, 401, { ok: false, error: "session required" });
+    return null;
+  }
+
+  if (!allowDemo && session.demo) {
+    sendJson(res, 401, { ok: false, error: "demo session not allowed" });
+    return null;
+  }
+
+  return session;
+}
+
+function getRequestMachineToken(req) {
+  const headerToken = req.headers["x-noecho-machine-token"];
+  if (typeof headerToken === "string" && headerToken.trim()) {
+    return headerToken.trim();
+  }
+
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer machine_")) {
+    return authHeader.slice(7).trim();
+  }
+
+  return null;
+}
+
+function getAuthorizedMachine(req) {
+  const token = getRequestMachineToken(req);
+  if (!token) return null;
+  return [...machines.values()].find((machine) => machine.machineToken === token) || null;
+}
+
+function requireMachine(req, res) {
+  const machine = getAuthorizedMachine(req);
+  if (machine) return machine;
+
+  if (!daemonAuthRequired) {
+    return {
+      id: "machine_dev",
+      ownerId: activeProfileId || "profile_demo",
+      name: "local-daemon",
+      status: "online",
+      dev: true
+    };
+  }
+
+  sendJson(res, 401, { ok: false, error: "machine token required" });
+  return null;
+}
+
 function openApiDocument() {
   return {
     openapi: "3.1.0",
@@ -213,13 +321,14 @@ function createPairing(input = {}) {
     profileId: input.profileId || "profile_demo",
     machineName: input.machineName || "vps-helix",
     pairingUrl: `noecho://pair?code=${code}`,
-    command: `noecho pair ${code}`,
+    command: `noecho pair ${code} --server ${publicBaseUrl}`,
     status: "pairing",
     createdAt: now,
     expiresAt
   };
 
   pairingCodes.set(code, pairing);
+  persistServerState();
   return pairing;
 }
 
@@ -227,6 +336,8 @@ function createApproval(input = {}) {
   const approval = {
     id: input.id || `approval_${randomUUID().split("-")[0]}`,
     tabId: input.tabId || "codex-goal",
+    roomId: input.roomId ? String(input.roomId) : "",
+    messageId: input.messageId ? String(input.messageId) : "",
     title: String(input.title || "Approval required"),
     detail: String(input.detail || "Agent action requires approval."),
     risk: String(input.risk || "safe"),
@@ -235,7 +346,209 @@ function createApproval(input = {}) {
     status: String(input.status || "pending")
   };
   approvalRequests.set(approval.id, approval);
+  persistServerState();
   return approval;
+}
+
+function participantsForRoom(roomId) {
+  return roomParticipants.get(roomId) || [];
+}
+
+function messagesForRoom(roomId) {
+  return roomMessages.get(roomId) || [];
+}
+
+function workForRoom(roomId) {
+  return roomWorkItems.get(roomId) || [];
+}
+
+function createRoom(input = {}) {
+  const now = new Date().toISOString();
+  const room = {
+    id: input.id || `room_${randomUUID().split("-")[0]}`,
+    profileId: input.profileId || activeProfileId || "profile_demo",
+    title: String(input.title || "Noecho model room"),
+    goalRunId: input.goalRunId ? String(input.goalRunId) : "",
+    status: "active",
+    createdAt: now,
+    updatedAt: now
+  };
+  rooms.set(room.id, room);
+
+  const participants = [
+    {
+      id: `participant_user_${randomUUID().split("-")[0]}`,
+      roomId: room.id,
+      kind: "user",
+      label: "You",
+      agent: "user",
+      status: "online",
+      createdAt: now
+    }
+  ];
+  for (const agent of Array.isArray(input.agents) && input.agents.length ? input.agents : ["codex", "claude"]) {
+    participants.push({
+      id: `participant_${agent}_${randomUUID().split("-")[0]}`,
+      roomId: room.id,
+      kind: "agent",
+      label: String(agent),
+      agent: String(agent),
+      status: "idle",
+      createdAt: now
+    });
+  }
+  roomParticipants.set(room.id, participants);
+  roomMessages.set(room.id, [
+    {
+      id: `message_${randomUUID().split("-")[0]}`,
+      roomId: room.id,
+      authorKind: "system",
+      authorLabel: "Noecho",
+      body: "Room ready. User messages are highest priority; agent actions require approval.",
+      priority: "normal",
+      createdAt: now
+    }
+  ]);
+  roomWorkItems.set(room.id, []);
+  persistServerState();
+  return room;
+}
+
+function addRoomParticipant(roomId, input = {}) {
+  const room = rooms.get(roomId);
+  if (!room) throw new Error("room not found");
+  const agent = String(input.agent || "codex").toLowerCase();
+  const participant = {
+    id: input.id || `participant_${agent}_${randomUUID().split("-")[0]}`,
+    roomId,
+    kind: agent === "user" ? "user" : "agent",
+    label: String(input.label || agent),
+    agent,
+    status: "idle",
+    createdAt: new Date().toISOString()
+  };
+  const participants = participantsForRoom(roomId);
+  participants.push(participant);
+  roomParticipants.set(roomId, participants);
+  rooms.set(roomId, { ...room, updatedAt: new Date().toISOString() });
+  persistServerState();
+  return participant;
+}
+
+function removeRoomParticipant(roomId, participantId) {
+  const participants = participantsForRoom(roomId);
+  roomParticipants.set(roomId, participants.filter((participant) => participant.id !== participantId));
+  persistServerState();
+}
+
+function enqueueRoomWork(roomId, message, targetAgents = []) {
+  const participants = participantsForRoom(roomId).filter((participant) => {
+    if (participant.kind !== "agent") return false;
+    return !targetAgents.length || targetAgents.includes(participant.agent);
+  });
+  const existing = workForRoom(roomId);
+  const created = participants.map((participant) => ({
+    id: `work_${randomUUID().split("-")[0]}`,
+    roomId,
+    messageId: message.id,
+    participantId: participant.id,
+    agent: participant.agent,
+    prompt: message.body,
+    priority: message.authorKind === "user" ? "high" : "normal",
+    status: "pending",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }));
+  roomWorkItems.set(roomId, [...existing, ...created]);
+  return created;
+}
+
+function appendRoomMessage(roomId, input = {}) {
+  const room = rooms.get(roomId);
+  if (!room) throw new Error("room not found");
+  const message = {
+    id: input.id || `message_${randomUUID().split("-")[0]}`,
+    roomId,
+    workId: input.workId ? String(input.workId) : "",
+    authorKind: String(input.authorKind || "user"),
+    authorLabel: String(input.authorLabel || "You"),
+    agent: input.agent ? String(input.agent) : "",
+    body: String(input.body || "").trim(),
+    priority: input.priority || (input.authorKind === "agent" ? "normal" : "high"),
+    createdAt: input.createdAt || new Date().toISOString()
+  };
+  if (!message.body) throw new Error("message body is required");
+  const messages = messagesForRoom(roomId);
+  messages.push(message);
+  roomMessages.set(roomId, messages.slice(-200));
+  rooms.set(roomId, { ...room, updatedAt: message.createdAt });
+
+  if (message.authorKind === "user") {
+    enqueueRoomWork(roomId, message, Array.isArray(input.targetAgents) ? input.targetAgents : []);
+  }
+
+  persistServerState();
+  return message;
+}
+
+function claimNextRoomWork(roomId, input = {}) {
+  const agents = Array.isArray(input.agents) && input.agents.length
+    ? input.agents.map((agent) => String(agent).toLowerCase())
+    : ["codex", "claude"];
+  const items = workForRoom(roomId);
+  const next = items
+    .filter((item) => item.status === "pending" && agents.includes(item.agent))
+    .sort((left, right) => {
+      if (left.priority !== right.priority) return left.priority === "high" ? -1 : 1;
+      return Date.parse(left.createdAt) - Date.parse(right.createdAt);
+    })[0];
+  if (!next) return null;
+  const claimed = {
+    ...next,
+    status: "claimed",
+    claimedBy: String(input.executor || "local-daemon"),
+    claimedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  roomWorkItems.set(roomId, items.map((item) => item.id === claimed.id ? claimed : item));
+  persistServerState();
+  return claimed;
+}
+
+function completeRoomWork(workId, input = {}) {
+  for (const [roomId, items] of roomWorkItems) {
+    const found = items.find((item) => item.id === workId);
+    if (!found) continue;
+    const completed = {
+      ...found,
+      status: input.status || "completed",
+      updatedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString()
+    };
+    roomWorkItems.set(roomId, items.map((item) => item.id === workId ? completed : item));
+    const message = input.body ? appendRoomMessage(roomId, {
+      workId,
+      authorKind: "agent",
+      authorLabel: input.authorLabel || found.agent,
+      agent: found.agent,
+      body: input.body,
+      priority: "normal"
+    }) : null;
+    if (input.proposedAction) {
+      createApproval({
+        roomId,
+        messageId: message?.id || found.messageId,
+        tabId: input.tabId || `${found.agent}-room`,
+        title: input.proposedAction.title || `${found.agent} action requires approval`,
+        detail: input.proposedAction.detail || found.prompt,
+        risk: input.proposedAction.risk || "file-edit",
+        amountUsd: input.proposedAction.amountUsd || 0
+      });
+    }
+    persistServerState();
+    return completed;
+  }
+  return null;
 }
 
 function appendTerminalChunk(input = {}) {
@@ -249,7 +562,134 @@ function appendTerminalChunk(input = {}) {
   const items = terminalChunks.get(chunk.tabId) || [];
   items.push(chunk);
   terminalChunks.set(chunk.tabId, items.slice(-120));
+  persistServerState();
   return chunk;
+}
+
+function commandsForTab(tabId) {
+  return [...commandDispatches.values()]
+    .filter((command) => command.tabId === tabId)
+    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
+}
+
+function queueCommand(input = {}) {
+  const commandText = String(input.command || "").trim();
+  if (!commandText) {
+    throw new Error("command is required");
+  }
+
+  const command = {
+    id: input.id || `command_${randomUUID().split("-")[0]}`,
+    tabId: input.tabId || "shell-local",
+    command: commandText,
+    source: String(input.source || "typed"),
+    projectId: input.projectId ? String(input.projectId) : "",
+    projectPath: input.projectPath ? String(input.projectPath) : "",
+    model: input.model ? String(input.model) : "",
+    status: "pending",
+    createdAt: input.createdAt || new Date().toISOString(),
+    updatedAt: input.updatedAt || new Date().toISOString()
+  };
+
+  commandDispatches.set(command.id, command);
+  appendTerminalChunk({
+    tabId: command.tabId,
+    stream: "meta",
+    chunk: `$ ${command.command}`
+  });
+  upsertTab({
+    id: command.tabId,
+    status: "running",
+    summary: `${command.source} command queued from phone`
+  });
+  persistServerState();
+  return command;
+}
+
+function claimNextCommand(tabId, input = {}) {
+  const next = commandsForTab(tabId).find((command) => command.status === "pending");
+  if (!next) return null;
+
+  const claimed = {
+    ...next,
+    status: "claimed",
+    claimedAt: new Date().toISOString(),
+    claimedBy: String(input.executor || "local-daemon"),
+    updatedAt: new Date().toISOString()
+  };
+
+  commandDispatches.set(claimed.id, claimed);
+  upsertTab({
+    id: claimed.tabId,
+    status: "running",
+    summary: `executing ${claimed.command}`
+  });
+  persistServerState();
+  return claimed;
+}
+
+function lineChunks(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trimEnd())
+      .filter(Boolean);
+  }
+
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((item) => item.trimEnd())
+    .filter(Boolean);
+}
+
+function completeCommand(commandId, input = {}) {
+  const command = commandDispatches.get(commandId);
+  if (!command) return null;
+
+  const status = String(input.status || "completed");
+  const exitCode = Number(input.exitCode ?? 0);
+  const finishedAt = new Date().toISOString();
+  const stdoutChunks = lineChunks(input.stdout || input.stdoutChunks);
+  const stderrChunks = lineChunks(input.stderr || input.stderrChunks);
+
+  for (const chunk of stdoutChunks) {
+    appendTerminalChunk({
+      tabId: command.tabId,
+      stream: "stdout",
+      chunk
+    });
+  }
+
+  for (const chunk of stderrChunks) {
+    appendTerminalChunk({
+      tabId: command.tabId,
+      stream: "stderr",
+      chunk
+    });
+  }
+
+  appendTerminalChunk({
+    tabId: command.tabId,
+    stream: "meta",
+    chunk: exitCode === 0 ? "command completed" : `command failed with exit ${exitCode}`
+  });
+
+  const tab = tabs.get(command.tabId);
+  upsertTab({
+    id: command.tabId,
+    status: exitCode === 0 ? (tab?.mode === "terminal" ? "idle" : "running") : "blocked",
+    summary: exitCode === 0 ? `last command: ${command.command}` : `command failed: ${command.command}`
+  });
+
+  const completed = {
+    ...command,
+    status,
+    exitCode,
+    finishedAt,
+    updatedAt: finishedAt
+  };
+  commandDispatches.set(commandId, completed);
+  persistServerState();
+  return completed;
 }
 
 function upsertTab(input = {}) {
@@ -268,6 +708,7 @@ function upsertTab(input = {}) {
     spendUsd: Number(input.spendUsd ?? existing.spendUsd ?? 0)
   };
   tabs.set(next.id, next);
+  persistServerState();
   return next;
 }
 
@@ -324,15 +765,97 @@ function createGoalRun(input) {
       createdAt: now
     }
   ]);
+  persistServerState();
   return run;
 }
+
+function readPersistedState() {
+  if (!existsSync(statePath)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(readFileSync(statePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function replaceMapEntries(map, items, keySelector) {
+  map.clear();
+  for (const item of Array.isArray(items) ? items : []) {
+    map.set(keySelector(item), item);
+  }
+}
+
+function replaceNestedMapEntries(map, items, keySelector, valueSelector) {
+  map.clear();
+  for (const item of Array.isArray(items) ? items : []) {
+    map.set(keySelector(item), valueSelector(item));
+  }
+}
+
+function persistServerState() {
+  mkdirSync(stateDir, { recursive: true });
+  const payload = {
+    version: 1,
+    profileId: activeProfileId,
+    savedAt: new Date().toISOString(),
+    sessions: [...sessions.values()],
+    pairingCodes: [...pairingCodes.values()],
+    machines: [...machines.values()],
+    tabs: [...tabs.values()],
+    terminalChunks: [...terminalChunks.entries()].map(([tabId, chunks]) => ({ tabId, chunks })),
+    approvals: [...approvalRequests.values()],
+    commandDispatches: [...commandDispatches.values()],
+    goalRuns: [...goalRuns.values()],
+    goalCheckpoints: [...goalCheckpoints.entries()].map(([goalRunId, checkpoints]) => ({ goalRunId, checkpoints })),
+    rooms: [...rooms.values()],
+    roomParticipants: [...roomParticipants.entries()].map(([roomId, participants]) => ({ roomId, participants })),
+    roomMessages: [...roomMessages.entries()].map(([roomId, messages]) => ({ roomId, messages })),
+    roomWorkItems: [...roomWorkItems.entries()].map(([roomId, workItems]) => ({ roomId, workItems }))
+  };
+
+  writeFileSync(statePath, `${JSON.stringify(payload, null, 2)}\n`);
+  void stateStore.save(payload, activeProfileId);
+}
+
+function applyPersistedState(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return;
+
+  replaceMapEntries(sessions, snapshot.sessions, (item) => item.sessionToken);
+  replaceMapEntries(pairingCodes, snapshot.pairingCodes, (item) => item.code);
+  replaceMapEntries(machines, snapshot.machines, (item) => item.id);
+  replaceMapEntries(tabs, snapshot.tabs, (item) => item.id);
+  replaceMapEntries(approvalRequests, snapshot.approvals, (item) => item.id);
+  replaceMapEntries(commandDispatches, snapshot.commandDispatches, (item) => item.id);
+  replaceMapEntries(goalRuns, snapshot.goalRuns, (item) => item.id);
+  replaceMapEntries(rooms, snapshot.rooms, (item) => item.id);
+  replaceNestedMapEntries(terminalChunks, snapshot.terminalChunks, (item) => item.tabId, (item) => item.chunks || []);
+  replaceNestedMapEntries(goalCheckpoints, snapshot.goalCheckpoints, (item) => item.goalRunId, (item) => item.checkpoints || []);
+  replaceNestedMapEntries(roomParticipants, snapshot.roomParticipants, (item) => item.roomId, (item) => item.participants || []);
+  replaceNestedMapEntries(roomMessages, snapshot.roomMessages, (item) => item.roomId, (item) => item.messages || []);
+  replaceNestedMapEntries(roomWorkItems, snapshot.roomWorkItems, (item) => item.roomId, (item) => item.workItems || []);
+
+  for (const [code, pairing] of pairingCodes) {
+    if (pairing.expiresAt && Date.parse(pairing.expiresAt) < Date.now()) {
+      pairingCodes.delete(code);
+    }
+  }
+
+  if (snapshot.profileId) {
+    activeProfileId = snapshot.profileId;
+  }
+}
+const bootSnapshot = await stateStore.load();
+applyPersistedState(bootSnapshot || readPersistedState());
 
 createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "access-control-allow-origin": origin,
-      "access-control-allow-headers": "authorization,content-type,x-mpp-receipt",
-      "access-control-allow-methods": "GET,POST,OPTIONS"
+      "access-control-allow-headers": "authorization,content-type,x-mpp-receipt,x-noecho-machine-token",
+      "access-control-allow-methods": "GET,POST,DELETE,OPTIONS"
     });
     res.end();
     return;
@@ -391,8 +914,12 @@ createServer(async (req, res) => {
         return;
       }
 
+      if (stateStore.isHostedEnabled()) {
+        activeProfileId = await stateStore.ensureProfileForAddress(address);
+      }
+
       const sessionToken = randomUUID();
-      const profileId = `profile_${address.toLowerCase().slice(2, 10)}`;
+      const profileId = activeProfileId || `profile_${address.toLowerCase().slice(2, 10)}`;
       sessions.set(sessionToken, {
         sessionToken,
         profileId,
@@ -400,6 +927,7 @@ createServer(async (req, res) => {
         createdAt: new Date().toISOString()
       });
       nonces.delete(nonce);
+      persistServerState();
 
       sendJson(res, 200, {
         ok: true,
@@ -420,17 +948,17 @@ createServer(async (req, res) => {
   }
 
   if (req.url?.startsWith("/auth/session") && req.method === "GET") {
-    const url = new URL(req.url, `http://127.0.0.1:${port}`);
-    const token = url.searchParams.get("token");
-    const session = token ? sessions.get(token) : null;
+    const session = getPersistedSessionForRequest(req);
     sendJson(res, session ? 200 : 404, session ? { ok: true, session } : { ok: false, error: "session not found" });
     return;
   }
 
   if (req.url === "/pairing/start" && req.method === "POST") {
     try {
+      const session = requireSession(req, res);
+      if (!session) return;
       const body = await readJson(req);
-      sendJson(res, 201, { ok: true, pairing: createPairing(body) });
+      sendJson(res, 201, { ok: true, pairing: createPairing({ ...body, profileId: session.profileId }) });
     } catch (error) {
       sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
     }
@@ -464,13 +992,15 @@ createServer(async (req, res) => {
         ownerId: pairing.profileId,
         name: body.machineName || pairing.machineName,
         publicKey: body.publicKey || `ssh-ed25519 ${code} noecho-pairing`,
+        machineToken: body.machineToken || `machine_${randomUUID()}`,
         status: "online",
         createdAt: new Date().toISOString()
       };
 
       machines.set(machine.id, machine);
       pairingCodes.set(code, { ...pairing, status: "online", machineId: machine.id });
-      sendJson(res, 200, { ok: true, machine });
+      persistServerState();
+      sendJson(res, 200, { ok: true, machine, machineToken: machine.machineToken });
     } catch (error) {
       sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
     }
@@ -478,7 +1008,10 @@ createServer(async (req, res) => {
   }
 
   if (req.url === "/machines" && req.method === "GET") {
-    sendJson(res, 200, { ok: true, machines: [...machines.values()] });
+    sendJson(res, 200, {
+      ok: true,
+      machines: [...machines.values()].map(({ machineToken, ...machine }) => machine)
+    });
     return;
   }
 
@@ -491,6 +1024,65 @@ createServer(async (req, res) => {
   if (terminalMatch && req.method === "GET") {
     const tabId = terminalMatch[1];
     sendJson(res, 200, { ok: true, chunks: terminalChunks.get(tabId) || [] });
+    return;
+  }
+
+  const tabCommandsMatch = req.url?.match(/^\/tabs\/([^/]+)\/commands$/);
+  if (tabCommandsMatch && req.method === "GET") {
+    const tabId = tabCommandsMatch[1];
+    sendJson(res, 200, { ok: true, commands: commandsForTab(tabId) });
+    return;
+  }
+
+  if (tabCommandsMatch && req.method === "POST") {
+    try {
+      const session = requireSession(req, res);
+      if (!session) return;
+      const tabId = tabCommandsMatch[1];
+      if (!tabs.has(tabId)) {
+        sendJson(res, 404, { ok: false, error: "tab not found" });
+        return;
+      }
+
+      const body = await readJson(req);
+      const command = queueCommand({ ...body, tabId });
+      sendJson(res, 202, { ok: true, command });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
+    return;
+  }
+
+  const claimCommandMatch = req.url?.match(/^\/tabs\/([^/]+)\/commands\/claim$/);
+  if (claimCommandMatch && req.method === "POST") {
+    try {
+      const machine = requireMachine(req, res);
+      if (!machine) return;
+      const tabId = claimCommandMatch[1];
+      const body = await readJson(req);
+      const command = claimNextCommand(tabId, { ...body, executor: body.executor || machine.name });
+      sendJson(res, 200, { ok: true, command });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
+    return;
+  }
+
+  const completeCommandMatch = req.url?.match(/^\/commands\/([^/]+)\/complete$/);
+  if (completeCommandMatch && req.method === "POST") {
+    try {
+      const machine = requireMachine(req, res);
+      if (!machine) return;
+      const body = await readJson(req);
+      const command = completeCommand(completeCommandMatch[1], body);
+      if (!command) {
+        sendJson(res, 404, { ok: false, error: "command not found" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, command });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
     return;
   }
 
@@ -509,7 +1101,9 @@ createServer(async (req, res) => {
       sendJson(res, 404, { ok: false, error: "approval not found" });
       return;
     }
+    if (!requireSession(req, res)) return;
     approvalRequests.set(approval.id, { ...approval, status: "resolved" });
+    persistServerState();
     sendJson(res, 200, { ok: true, approval: { ...approval, status: "resolved" } });
     return;
   }
@@ -525,8 +1119,10 @@ createServer(async (req, res) => {
 
   if (req.url === "/goals" && req.method === "POST") {
     try {
+      const session = requireSession(req, res);
+      if (!session) return;
       const body = await readJson(req);
-      const run = createGoalRun(body);
+      const run = createGoalRun({ ...body, profileId: session.profileId });
       sendJson(res, 201, { ok: true, run, checkpoints: goalCheckpoints.get(run.id) || [] });
     } catch (error) {
       sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
@@ -537,6 +1133,8 @@ createServer(async (req, res) => {
   const checkpointMatch = req.url?.match(/^\/goals\/([^/]+)\/checkpoints$/);
   if (checkpointMatch && req.method === "POST") {
     try {
+      const session = requireSession(req, res);
+      if (!session) return;
       const goalRunId = checkpointMatch[1];
       const run = goalRuns.get(goalRunId);
       if (!run) {
@@ -556,6 +1154,7 @@ createServer(async (req, res) => {
       checkpoints.push(checkpoint);
       goalCheckpoints.set(goalRunId, checkpoints);
       goalRuns.set(goalRunId, { ...run, updatedAt: checkpoint.createdAt });
+      persistServerState();
       sendJson(res, 201, { ok: true, checkpoint });
     } catch (error) {
       sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
@@ -565,6 +1164,8 @@ createServer(async (req, res) => {
 
   if (req.url === "/daemon/sync" && req.method === "POST") {
     try {
+      const machine = requireMachine(req, res);
+      if (!machine) return;
       const body = await readJson(req);
       const tab = body.tab ? upsertTab(body.tab) : null;
       const chunks = Array.isArray(body.chunks) ? body.chunks.map((chunk) => appendTerminalChunk(chunk)) : [];
@@ -584,10 +1185,155 @@ createServer(async (req, res) => {
           items.push(checkpoint);
           goalCheckpoints.set(run.id, items);
           goalRuns.set(run.id, { ...run, updatedAt: checkpoint.createdAt });
+          persistServerState();
         }
       }
 
       sendJson(res, 200, { ok: true, tab, chunks, approvals });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
+    return;
+  }
+
+  if (req.url === "/rooms" && req.method === "GET") {
+    const session = requireSession(req, res);
+    if (!session) return;
+    const visibleRooms = [...rooms.values()].filter((room) => room.profileId === session.profileId || session.demo);
+    sendJson(res, 200, {
+      ok: true,
+      rooms: visibleRooms.map((room) => ({
+        ...room,
+        participants: participantsForRoom(room.id),
+        latestMessage: messagesForRoom(room.id).at(-1) || null
+      }))
+    });
+    return;
+  }
+
+  if (req.url === "/rooms" && req.method === "POST") {
+    try {
+      const session = requireSession(req, res);
+      if (!session) return;
+      const body = await readJson(req);
+      const room = createRoom({ ...body, profileId: session.profileId });
+      sendJson(res, 201, {
+        ok: true,
+        room,
+        participants: participantsForRoom(room.id),
+        messages: messagesForRoom(room.id)
+      });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
+    return;
+  }
+
+  const roomMessagesMatch = req.url?.match(/^\/rooms\/([^/]+)\/messages$/);
+  if (roomMessagesMatch && req.method === "GET") {
+    const session = requireSession(req, res);
+    if (!session) return;
+    const roomId = roomMessagesMatch[1];
+    const room = rooms.get(roomId);
+    if (!room || (room.profileId !== session.profileId && !session.demo)) {
+      sendJson(res, 404, { ok: false, error: "room not found" });
+      return;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      room,
+      participants: participantsForRoom(roomId),
+      messages: messagesForRoom(roomId)
+    });
+    return;
+  }
+
+  if (roomMessagesMatch && req.method === "POST") {
+    try {
+      const session = requireSession(req, res);
+      if (!session) return;
+      const roomId = roomMessagesMatch[1];
+      const room = rooms.get(roomId);
+      if (!room || (room.profileId !== session.profileId && !session.demo)) {
+        sendJson(res, 404, { ok: false, error: "room not found" });
+        return;
+      }
+      const body = await readJson(req);
+      const message = appendRoomMessage(roomId, {
+        ...body,
+        authorKind: "user",
+        authorLabel: body.authorLabel || "You"
+      });
+      sendJson(res, 201, {
+        ok: true,
+        message,
+        workItems: workForRoom(roomId).filter((item) => item.messageId === message.id)
+      });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
+    return;
+  }
+
+  const roomParticipantsMatch = req.url?.match(/^\/rooms\/([^/]+)\/participants$/);
+  if (roomParticipantsMatch && req.method === "POST") {
+    try {
+      const session = requireSession(req, res);
+      if (!session) return;
+      const roomId = roomParticipantsMatch[1];
+      const room = rooms.get(roomId);
+      if (!room || (room.profileId !== session.profileId && !session.demo)) {
+        sendJson(res, 404, { ok: false, error: "room not found" });
+        return;
+      }
+      const participant = addRoomParticipant(roomId, await readJson(req));
+      sendJson(res, 201, { ok: true, participant });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
+    return;
+  }
+
+  const removeParticipantMatch = req.url?.match(/^\/rooms\/([^/]+)\/participants\/([^/]+)$/);
+  if (removeParticipantMatch && req.method === "DELETE") {
+    const session = requireSession(req, res);
+    if (!session) return;
+    const roomId = removeParticipantMatch[1];
+    const room = rooms.get(roomId);
+    if (!room || (room.profileId !== session.profileId && !session.demo)) {
+      sendJson(res, 404, { ok: false, error: "room not found" });
+      return;
+    }
+    removeRoomParticipant(roomId, removeParticipantMatch[2]);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  const claimRoomWorkMatch = req.url?.match(/^\/daemon\/rooms\/([^/]+)\/work\/claim$/);
+  if (claimRoomWorkMatch && req.method === "POST") {
+    try {
+      const machine = requireMachine(req, res);
+      if (!machine) return;
+      const body = await readJson(req);
+      const work = claimNextRoomWork(claimRoomWorkMatch[1], { ...body, executor: body.executor || machine.name });
+      sendJson(res, 200, { ok: true, work });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
+    }
+    return;
+  }
+
+  const completeRoomWorkMatch = req.url?.match(/^\/daemon\/work\/([^/]+)\/complete$/);
+  if (completeRoomWorkMatch && req.method === "POST") {
+    try {
+      const machine = requireMachine(req, res);
+      if (!machine) return;
+      const work = completeRoomWork(completeRoomWorkMatch[1], await readJson(req));
+      if (!work) {
+        sendJson(res, 404, { ok: false, error: "work not found" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, work });
     } catch (error) {
       sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "bad request" });
     }
@@ -621,6 +1367,6 @@ createServer(async (req, res) => {
 
   res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
   res.end("noecho self-hosted server scaffold\n");
-}).listen(port, "127.0.0.1", () => {
-  console.log(`noecho server scaffold listening at http://127.0.0.1:${port}`);
+}).listen(port, host, () => {
+  console.log(`noecho server listening at http://${host}:${port}`);
 });
