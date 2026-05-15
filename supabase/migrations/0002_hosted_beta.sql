@@ -125,8 +125,8 @@ create policy "own spend limits" on public.spend_limits
 
 drop policy if exists "own donations" on public.donations;
 create policy "own donations" on public.donations
-  for all using (public.profile_id is null or public.noecho_owns_profile(profile_id))
-  with check (public.profile_id is null or public.noecho_owns_profile(profile_id));
+  for all using (profile_id is null or public.noecho_owns_profile(profile_id))
+  with check (profile_id is null or public.noecho_owns_profile(profile_id));
 
 comment on column public.profiles.auth_user_id is
   'Bound to Supabase auth.users.id once wallet login is implemented.';
